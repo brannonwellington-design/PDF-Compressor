@@ -454,6 +454,9 @@
             <div class="level-desc-text" id="level-desc-text">
                 Good compression with high visual quality. Best for most uses.
             </div>
+            <div id="raster-badge" style="display:none; padding: 8px 12px; background: #fff3cd; border-radius: 8px; font-size: 12px; color: #856404; margin-bottom: 12px;">
+                ⚡ Rasterize mode — pages are rendered as images. Much smaller files but text won't be selectable.
+            </div>
             <div class="settings-grid">
                 <div>Image DPI → <span class="settings-value" id="set-dpi">150</span></div>
                 <div>JPEG quality → <span class="settings-value" id="set-jpeg">82%</span></div>
@@ -532,13 +535,13 @@
     let compressedName = '';
 
     const levels = {
-        '1': { name: 'Lossless cleanup',  dpi: 300, jpeg: 95, meta: false, desc: 'Removes unused objects and recompresses streams. No image quality loss at all. Smallest file size reduction.' },
-        '2': { name: 'High quality',      dpi: 250, jpeg: 92, meta: false, desc: 'Very gentle image resampling. Visually indistinguishable from the original in almost all cases.' },
-        '3': { name: 'Quality',           dpi: 200, jpeg: 88, meta: true,  desc: 'Light compression with minimal visual impact. Good for documents you want to look sharp.' },
-        '4': { name: 'Balanced',          dpi: 150, jpeg: 82, meta: true,  desc: 'Good compression with high visual quality. Best for most uses.' },
-        '5': { name: 'Email-ready',       dpi: 120, jpeg: 72, meta: true,  desc: 'Targets files under 5 MB for email. Images may look slightly softer up close.' },
-        '6': { name: 'Aggressive',        dpi: 96,  jpeg: 60, meta: true,  desc: 'Heavy compression for very large files. Noticeable image quality reduction but text stays sharp.' },
-        '7': { name: 'Maximum',           dpi: 72,  jpeg: 45, meta: true,  desc: 'Smallest possible file size. Images will lose significant detail. Only use when size is critical.' },
+        '1': { name: 'Lossless cleanup',  dpi: 300, jpeg: 95, meta: false, raster: false, desc: 'Removes unused objects and recompresses streams. No image quality loss at all. Smallest file size reduction.' },
+        '2': { name: 'High quality',      dpi: 250, jpeg: 92, meta: false, raster: false, desc: 'Very gentle image resampling. Visually indistinguishable from the original in almost all cases.' },
+        '3': { name: 'Quality',           dpi: 200, jpeg: 88, meta: true,  raster: false, desc: 'Light compression with minimal visual impact. Good for documents you want to look sharp.' },
+        '4': { name: 'Balanced',          dpi: 150, jpeg: 82, meta: true,  raster: false, desc: 'Good compression with high visual quality. Best for most uses.' },
+        '5': { name: 'Email-ready',       dpi: 120, jpeg: 72, meta: true,  raster: false, desc: 'Compresses images and removes metadata. Text stays selectable. Good for most email needs.' },
+        '6': { name: 'Aggressive',        dpi: 150, jpeg: 80, meta: true,  raster: true,  desc: 'Renders pages as images for maximum compression. Great for design-heavy decks. Text is no longer selectable.' },
+        '7': { name: 'Maximum',           dpi: 120, jpeg: 65, meta: true,  raster: true,  desc: 'Lowest file size possible. Pages rendered as compressed images. Best when file size is the only priority.' },
     };
 
     // ── Helpers ──
@@ -607,6 +610,10 @@
         document.getElementById('set-dpi').textContent = lv.dpi;
         document.getElementById('set-jpeg').textContent = lv.jpeg + '%';
         document.getElementById('set-meta').textContent = lv.meta ? 'on' : 'off';
+
+        // Show raster warning for levels 6-7
+        const rasterBadge = document.getElementById('raster-badge');
+        if (rasterBadge) rasterBadge.style.display = lv.raster ? 'block' : 'none';
     }
 
     slider.addEventListener('input', updateLevel);
