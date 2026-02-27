@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compress — Make your PDFs email-ready</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #f9f4eb;
+            --text: #120F08;
+            --text-60: rgba(18, 15, 8, 0.6);
+            --text-40: rgba(18, 15, 8, 0.4);
+            --text-20: rgba(18, 15, 8, 0.2);
+            --text-10: rgba(18, 15, 8, 0.1);
+            --text-06: rgba(18, 15, 8, 0.06);
+            --brand: #0021cc;
+            --brand-light: rgba(0, 33, 204, 0.06);
+            --brand-mid: rgba(0, 33, 204, 0.12);
+            --white: #ffffff;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+
+        /* ── Header ── */
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .logo {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 28px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: var(--brand);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 15px;
+        }
+
+        .logo-text {
+            font-size: 15px;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+
+        .headline {
+            font-size: 38px;
+            font-weight: 400;
+            line-height: 1.15;
+            letter-spacing: -0.03em;
+            margin-bottom: 14px;
+        }
+
+        .headline em {
+            color: var(--brand);
+            font-style: italic;
+        }
+
+        .subline {
+            font-size: 15px;
+            color: var(--text-60);
+            line-height: 1.55;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        /* ── Steps ── */
+        .steps {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin-bottom: 28px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .step-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-20);
+            transition: background 0.3s;
+        }
+
+        .step-dot.active { background: var(--brand); }
+
+        .step-label {
+            font-size: 12px;
+            color: var(--text-40);
+            transition: color 0.3s;
+        }
+
+        .step-label.active { color: var(--text); }
+
+        .step-line {
+            width: 20px;
+            height: 1px;
+            background: var(--text-10);
+        }
+
+        .step-line.active { background: var(--brand-mid); }
+
+        /* ── Sections ── */
+        .section {
+            display: none;
+            animation: fadeIn 0.35s ease;
+        }
+
+        .section.visible { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Drop Zone ── */
+        .dropzone {
+            border: 2px dashed var(--text-20);
+            border-radius: 14px;
+            padding: 56px 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s;
+        }
+
+        .dropzone:hover, .dropzone.dragging {
+            border-color: var(--brand);
+            background: var(--brand-light);
+        }
+
+        .dropzone-arrow {
+            font-size: 40px;
+            margin-bottom: 14px;
+            opacity: 0.6;
+            transition: opacity 0.25s;
+        }
+
+        .dropzone:hover .dropzone-arrow { opacity: 1; }
+
+        .dropzone-title {
+            font-size: 17px;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .dropzone-sub {
+            font-size: 13px;
+            color: var(--text-40);
+        }
+
+        /* ── Preserves Card ── */
+        .card {
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--text-06);
+            padding: 20px 24px;
+            margin-top: 28px;
+        }
+
+        .card-title {
+            font-size: 13px;
+            color: var(--text);
+            margin-bottom: 14px;
+        }
+
+        .preserves-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .preserve-item {
+            font-size: 13px;
+            color: var(--text-60);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preserve-check {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            background: var(--brand-light);
+            color: var(--brand);
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        /* ── File Info ── */
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 18px;
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--text-06);
+            margin-bottom: 24px;
+        }
+
+        .file-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            background: var(--brand-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .file-details { flex: 1; min-width: 0; }
+
+        .file-name {
+            font-size: 14px;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-size {
+            font-size: 13px;
+            color: var(--text-40);
+        }
+
+        .file-remove {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            color: var(--text-40);
+            padding: 4px 8px;
+        }
+
+        .file-remove:hover { color: var(--text); }
+
+        /* ── Presets ── */
+        .presets-label {
+            font-size: 13px;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .presets {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .preset {
+            flex: 1;
+            padding: 18px 14px;
+            border: 2px solid var(--text-10);
+            border-radius: 12px;
+            background: transparent;
+            cursor: pointer;
+            text-align: left;
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            transition: all 0.2s;
+        }
+
+        .preset:hover { border-color: var(--text-20); }
+        .preset.active { border-color: var(--brand); background: var(--brand-light); }
+
+        .preset-icon { font-size: 22px; margin-bottom: 8px; }
+        .preset-name { font-size: 14px; color: var(--text); margin-bottom: 4px; }
+        .preset-desc { font-size: 11px; color: var(--text-40); line-height: 1.45; }
+
+        /* ── Settings Detail ── */
+        .settings-detail {
+            padding: 16px 20px;
+            background: var(--white);
+            border-radius: 12px;
+            border: 1px solid var(--text-06);
+            margin-bottom: 28px;
+        }
+
+        .settings-title {
+            font-size: 11px;
+            color: var(--text-40);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 12px;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-60);
+        }
+
+        .settings-value { color: var(--brand); }
+
+        /* ── Buttons ── */
+        .btn-primary {
+            width: 100%;
+            padding: 15px;
+            background: var(--brand);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary:hover { background: #001aa3; }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .btn-secondary {
+            width: 100%;
+            padding: 15px;
+            background: transparent;
+            color: var(--text);
+            border: 2px solid var(--text-10);
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover { border-color: var(--text-20); }
+
+        .btn-row {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .btn-row .btn-secondary { flex: none; width: auto; padding: 15px 24px; }
+
+        /* ── Progress ── */
+        .progress-section {
+            text-align: center;
+            padding: 48px 0;
+        }
+
+        .progress-ring-wrap {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 28px;
+        }
+
+        .progress-pct {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            color: var(--brand);
+        }
+
+        .progress-label {
+            font-size: 15px;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .progress-sub {
+            font-size: 13px;
+            color: var(--text-40);
+        }
+
+        .progress-bar-track {
+            margin-top: 28px;
+            height: 3px;
+            background: var(--text-10);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--brand);
+            border-radius: 2px;
+            transition: width 0.5s ease;
+        }
+
+        /* ── Results ── */
+        .result-card {
+            background: var(--white);
+            border-radius: 16px;
+            padding: 32px;
+            border: 1px solid var(--text-06);
+        }
+
+        .result-layout {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 48px;
+            flex-wrap: wrap;
+        }
+
+        .result-ring { text-align: center; }
+
+        .result-pct {
+            font-size: 28px;
+            color: var(--brand);
+            margin-top: -78px;
+            margin-bottom: 52px;
+        }
+
+        .result-pct-label {
+            font-size: 13px;
+            color: var(--text-40);
+        }
+
+        .result-sizes { display: flex; flex-direction: column; gap: 16px; }
+
+        .result-size-label {
+            font-size: 11px;
+            color: var(--text-40);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 4px;
+        }
+
+        .result-size-value {
+            font-size: 20px;
+            color: var(--text);
+        }
+
+        .result-size-value.compressed { color: var(--brand); }
+
+        .result-divider {
+            width: 100%;
+            height: 1px;
+            background: var(--text-06);
+        }
+
+        .result-badges {
+            margin-top: 24px;
+            padding: 12px 16px;
+            background: var(--bg);
+            border-radius: 8px;
+            display: flex;
+            gap: 18px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .result-badge {
+            font-size: 13px;
+            color: var(--text-60);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .result-badge-check { color: var(--brand); }
+
+        /* ── Error ── */
+        .error-msg {
+            padding: 14px 18px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 10px;
+            font-size: 13px;
+            color: #991b1b;
+            margin-bottom: 20px;
+        }
+
+        /* ── Footer ── */
+        .footer {
+            margin-top: 56px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-40);
+            line-height: 1.7;
+        }
+
+        @media (max-width: 520px) {
+            .headline { font-size: 30px; }
+            .presets { flex-direction: column; }
+            .result-layout { gap: 28px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">
+            <div class="logo-icon">↘</div>
+            <span class="logo-text">Compress</span>
+        </div>
+        <h1 class="headline">Make your PDFs<br><em>email-ready</em></h1>
+        <p class="subline">Smart compression that preserves live text, hyperlinks, and image clarity.</p>
+    </div>
+
+    <!-- Steps -->
+    <div class="steps">
+        <div class="step">
+            <div class="step-dot active" id="dot-0"></div>
+            <span class="step-label active" id="label-0">Upload</span>
+        </div>
+        <div class="step-line" id="line-0"></div>
+        <div class="step">
+            <div class="step-dot" id="dot-1"></div>
+            <span class="step-label" id="label-1">Configure</span>
+        </div>
+        <div class="step-line" id="line-1"></div>
+        <div class="step">
+            <div class="step-dot" id="dot-2"></div>
+            <span class="step-label" id="label-2">Compress</span>
+        </div>
+        <div class="step-line" id="line-2"></div>
+        <div class="step">
+            <div class="step-dot" id="dot-3"></div>
+            <span class="step-label" id="label-3">Download</span>
+        </div>
+    </div>
+
+    <!-- Error -->
+    <div class="error-msg" id="error" style="display:none"></div>
+
+    <!-- Upload Section -->
+    <div class="section visible" id="sec-upload">
+        <div class="dropzone" id="dropzone">
+            <div class="dropzone-arrow">↓</div>
+            <div class="dropzone-title">Drop your PDF here</div>
+            <div class="dropzone-sub">or click to browse · up to 200 MB</div>
+            <input type="file" accept=".pdf" id="file-input" style="display:none">
+        </div>
+
+        <div class="card">
+            <div class="card-title">What gets preserved</div>
+            <div class="preserves-grid">
+                <div class="preserve-item"><span class="preserve-check">✓</span> Selectable text</div>
+                <div class="preserve-item"><span class="preserve-check">✓</span> All hyperlinks</div>
+                <div class="preserve-item"><span class="preserve-check">✓</span> Font rendering</div>
+                <div class="preserve-item"><span class="preserve-check">✓</span> Page structure</div>
+                <div class="preserve-item"><span class="preserve-check">✓</span> Bookmarks</div>
+                <div class="preserve-item"><span class="preserve-check">✓</span> Image clarity</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configure Section -->
+    <div class="section" id="sec-configure">
+        <div class="file-info">
+            <div class="file-icon">📄</div>
+            <div class="file-details">
+                <div class="file-name" id="file-name"></div>
+                <div class="file-size" id="file-size"></div>
+            </div>
+            <button class="file-remove" onclick="reset()" title="Remove file">×</button>
+        </div>
+
+        <div class="presets-label">Compression preset</div>
+        <div class="presets">
+            <button class="preset" data-preset="email" onclick="selectPreset('email')">
+                <div class="preset-icon">✉</div>
+                <div class="preset-name">Email-Ready</div>
+                <div class="preset-desc">Aggressive compression for email attachments. Target under 5 MB.</div>
+            </button>
+            <button class="preset active" data-preset="balanced" onclick="selectPreset('balanced')">
+                <div class="preset-icon">⚖</div>
+                <div class="preset-name">Balanced</div>
+                <div class="preset-desc">Good compression with high visual quality. Best for most uses.</div>
+            </button>
+            <button class="preset" data-preset="quality" onclick="selectPreset('quality')">
+                <div class="preset-icon">◆</div>
+                <div class="preset-name">High Quality</div>
+                <div class="preset-desc">Minimal visual loss. Best for archival or print-adjacent use.</div>
+            </button>
+        </div>
+
+        <div class="settings-detail">
+            <div class="settings-title">What this does</div>
+            <div class="settings-grid">
+                <div>Image DPI → <span class="settings-value" id="set-dpi">150</span></div>
+                <div>JPEG quality → <span class="settings-value" id="set-jpeg">82%</span></div>
+                <div>Font subsetting → <span class="settings-value">on</span></div>
+                <div>Strip metadata → <span class="settings-value" id="set-meta">on</span></div>
+            </div>
+        </div>
+
+        <button class="btn-primary" onclick="startCompress()">Compress PDF</button>
+    </div>
+
+    <!-- Compressing Section -->
+    <div class="section" id="sec-compressing">
+        <div class="progress-section">
+            <div class="progress-ring-wrap">
+                <svg width="130" height="130" style="transform:rotate(-90deg)">
+                    <circle cx="65" cy="65" r="58" fill="none" stroke="rgba(18,15,8,0.06)" stroke-width="5"/>
+                    <circle cx="65" cy="65" r="58" fill="none" stroke="#0021cc" stroke-width="5"
+                            stroke-dasharray="364.42" stroke-dashoffset="364.42" stroke-linecap="round"
+                            id="progress-circle" style="transition:stroke-dashoffset 0.5s ease"/>
+                </svg>
+                <div class="progress-pct" id="progress-pct">0%</div>
+            </div>
+            <div class="progress-label" id="progress-label">Reading PDF structure…</div>
+            <div class="progress-sub">This typically takes a few seconds</div>
+            <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Done Section -->
+    <div class="section" id="sec-done">
+        <div class="result-card">
+            <div class="result-layout">
+                <div class="result-ring">
+                    <svg width="120" height="120" style="transform:rotate(-90deg)">
+                        <circle cx="60" cy="60" r="54" fill="none" stroke="rgba(18,15,8,0.06)" stroke-width="5"/>
+                        <circle cx="60" cy="60" r="54" fill="none" stroke="#0021cc" stroke-width="5"
+                                stroke-dasharray="339.29" id="result-circle" stroke-linecap="round"/>
+                    </svg>
+                    <div class="result-pct" id="result-pct"></div>
+                    <div class="result-pct-label">smaller</div>
+                </div>
+                <div class="result-sizes">
+                    <div>
+                        <div class="result-size-label">Original</div>
+                        <div class="result-size-value" id="result-original"></div>
+                    </div>
+                    <div class="result-divider"></div>
+                    <div>
+                        <div class="result-size-label">Compressed</div>
+                        <div class="result-size-value compressed" id="result-compressed"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="result-badges">
+                <div class="result-badge"><span class="result-badge-check">✓</span> Live text</div>
+                <div class="result-badge"><span class="result-badge-check">✓</span> Hyperlinks</div>
+                <div class="result-badge"><span class="result-badge-check">✓</span> Fonts preserved</div>
+            </div>
+        </div>
+
+        <div class="btn-row" id="btn-row-done">
+            <!-- Buttons injected by JS -->
+        </div>
+    </div>
+
+    <div class="footer">
+        All processing happens on this server. Your files are deleted immediately after compression.<br>
+        Preserves text, links, bookmarks, and document structure.
+    </div>
+</div>
+
+<script>
+    let selectedFile = null;
+    let selectedPreset = 'balanced';
+    let compressedBlob = null;
+    let compressedName = '';
+
+    const presetSettings = {
+        email:    { dpi: 120, jpeg: 72, meta: true },
+        balanced: { dpi: 150, jpeg: 82, meta: true },
+        quality:  { dpi: 200, jpeg: 90, meta: false },
+    };
+
+    // ── Helpers ──
+
+    function formatBytes(b) {
+        if (b === 0) return '0 B';
+        const k = 1024, s = ['B','KB','MB','GB'];
+        const i = Math.floor(Math.log(b) / Math.log(k));
+        return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + s[i];
+    }
+
+    function showSection(name) {
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
+        document.getElementById('sec-' + name).classList.add('visible');
+
+        const stepMap = { upload: 0, configure: 1, compressing: 2, done: 3 };
+        const current = stepMap[name];
+        for (let i = 0; i < 4; i++) {
+            const dot = document.getElementById('dot-' + i);
+            const label = document.getElementById('label-' + i);
+            dot.classList.toggle('active', i <= current);
+            label.classList.toggle('active', i <= current);
+        }
+        for (let i = 0; i < 3; i++) {
+            document.getElementById('line-' + i).classList.toggle('active', i < current);
+        }
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('error');
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 6000);
+    }
+
+    // ── Drop Zone ──
+
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file-input');
+
+    dropzone.addEventListener('click', () => fileInput.click());
+
+    dropzone.addEventListener('dragover', e => {
+        e.preventDefault();
+        dropzone.classList.add('dragging');
+    });
+
+    dropzone.addEventListener('dragleave', e => {
+        e.preventDefault();
+        dropzone.classList.remove('dragging');
+    });
+
+    dropzone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropzone.classList.remove('dragging');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type === 'application/pdf') handleFile(file);
+        else showError('Please drop a PDF file.');
+    });
+
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files[0]) handleFile(fileInput.files[0]);
+    });
+
+    function handleFile(file) {
+        selectedFile = file;
+        document.getElementById('file-name').textContent = file.name;
+        document.getElementById('file-size').textContent = formatBytes(file.size);
+        document.getElementById('error').style.display = 'none';
+        showSection('configure');
+    }
+
+    // ── Presets ──
+
+    function selectPreset(name) {
+        selectedPreset = name;
+        document.querySelectorAll('.preset').forEach(p => {
+            p.classList.toggle('active', p.dataset.preset === name);
+        });
+        const s = presetSettings[name];
+        document.getElementById('set-dpi').textContent = s.dpi;
+        document.getElementById('set-jpeg').textContent = s.jpeg + '%';
+        document.getElementById('set-meta').textContent = s.meta ? 'on' : 'off';
+    }
+
+    // ── Compression ──
+
+    function setProgress(pct, label) {
+        const circ = document.getElementById('progress-circle');
+        const circumference = 364.42;
+        circ.setAttribute('stroke-dashoffset', circumference - (pct / 100) * circumference);
+        document.getElementById('progress-pct').textContent = pct + '%';
+        document.getElementById('progress-bar').style.width = pct + '%';
+        if (label) document.getElementById('progress-label').textContent = label;
+    }
+
+    async function startCompress() {
+        showSection('compressing');
+        compressedBlob = null;
+
+        const steps = [
+            { label: 'Reading PDF structure…', pct: 8 },
+            { label: 'Analyzing embedded images…', pct: 20 },
+            { label: 'Recompressing images…', pct: 45 },
+            { label: 'Subsetting fonts…', pct: 65 },
+            { label: 'Deduplicating objects…', pct: 80 },
+            { label: 'Optimizing streams…', pct: 92 },
+        ];
+
+        let stepIdx = 0;
+        const ticker = setInterval(() => {
+            if (stepIdx < steps.length) {
+                setProgress(steps[stepIdx].pct, steps[stepIdx].label);
+                stepIdx++;
+            }
+        }, 700);
+
+        try {
+            const form = new FormData();
+            form.append('file', selectedFile);
+            form.append('preset', selectedPreset);
+
+            const resp = await fetch('/compress', { method: 'POST', body: form });
+
+            clearInterval(ticker);
+
+            if (!resp.ok) {
+                const errData = await resp.json().catch(() => null);
+                throw new Error(errData?.error || 'Compression failed');
+            }
+
+            compressedBlob = await resp.blob();
+            compressedName = selectedFile.name.replace(/\.pdf$/i, '-compressed.pdf');
+
+            setProgress(100, 'Done!');
+
+            setTimeout(() => showResults(selectedFile.size, compressedBlob.size), 350);
+        } catch (err) {
+            clearInterval(ticker);
+            showError(err.message || 'Something went wrong. Please try again.');
+            showSection('configure');
+        }
+    }
+
+    function showResults(originalSize, compressedSize) {
+        const savings = Math.round((1 - compressedSize / originalSize) * 100);
+
+        // Ring
+        const circ = document.getElementById('result-circle');
+        const circumference = 339.29;
+        circ.setAttribute('stroke-dashoffset', circumference - (savings / 100) * circumference);
+
+        document.getElementById('result-pct').textContent = savings + '%';
+        document.getElementById('result-original').textContent = formatBytes(originalSize);
+        document.getElementById('result-compressed').textContent = formatBytes(compressedSize);
+
+        // Buttons
+        const row = document.getElementById('btn-row-done');
+        row.innerHTML = '';
+
+        if (compressedBlob) {
+            const dl = document.createElement('button');
+            dl.className = 'btn-primary';
+            dl.style.flex = '1';
+            dl.textContent = 'Download compressed PDF';
+            dl.onclick = downloadResult;
+            row.appendChild(dl);
+        }
+
+        const again = document.createElement('button');
+        again.className = 'btn-secondary';
+        again.textContent = compressedBlob ? 'New file' : 'Compress another PDF';
+        again.onclick = reset;
+        row.appendChild(again);
+
+        showSection('done');
+    }
+
+    function downloadResult() {
+        if (!compressedBlob) return;
+        const url = URL.createObjectURL(compressedBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = compressedName;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function reset() {
+        selectedFile = null;
+        compressedBlob = null;
+        compressedName = '';
+        fileInput.value = '';
+        selectPreset('balanced');
+        setProgress(0, 'Reading PDF structure…');
+        document.getElementById('error').style.display = 'none';
+        showSection('upload');
+    }
+</script>
+
+</body>
+</html>
