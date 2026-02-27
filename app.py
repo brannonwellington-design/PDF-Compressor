@@ -83,6 +83,10 @@ def ghostscript_vector_compress(input_path, output_path, config):
         "-dOptimize=true", "-dDetectDuplicateImages=true",
         "-dConvertCMYKImagesToRGB=true",
 
+        # Preserve text encoding for proper copy/paste
+        "-dHaveTransparency=true",
+        "-dPreserveMarkedContent=true",
+
         "-c",
         f"<< /ColorACSImageDict << /QFactor {qfactor} /Blend 1 /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> "
         f"/GrayACSImageDict << /QFactor {qfactor} /Blend 1 /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> "
@@ -265,19 +269,18 @@ def ghostscript_rasterize(input_path, output_path, config):
 
 def fix_preview_smasks(pdf):
     """
-    Apple Preview has bugs rendering certain SMask (soft mask) configurations
-    that Ghostscript produces. This strips SMasks from images where the mask
-    is fully opaque (all white / value 255), since those masks are decorative
-    and not needed. For non-trivial masks, we flatten the image onto white.
+    Apple Preview has bugs rendering SMask (soft mask) on images with
+    ICCBased colorspaces. Fix by pre-compositing masked images onto
+    a background color (sampled from the page) and removing the SMask.
     """
     for page in pdf.pages:
         try:
-            _fix_smasks_in_resources(page.get("/Resources", {}))
-        except Exception:
-            pass
+            _fix_smasks_in_resources(pdf, page.get("/Resources", {}))
+        except Exception as e:
+            log.warning(f"SMask fix error on page: {e}")
 
 
-def _fix_smasks_in_resources(resources):
+def _fix_smasks_in_resources(pdf, resources):
     if not hasattr(resources, 'get'):
         return
     xobjects = resources.get("/XObject", {})
@@ -290,13 +293,75 @@ def _fix_smasks_in_resources(resources):
             subtype = str(obj.get("/Subtype", ""))
 
             if "/Image" in subtype and "/SMask" in obj:
-                # Just remove the SMask — GS often creates unnecessary ones
-                del obj[Name("/SMask")]
+                _flatten_smask_image(pdf, obj)
 
             elif "/Form" in subtype:
-                # Recurse into Form XObjects
                 form_res = obj.get("/Resources", {})
-                _fix_smasks_in_resources(form_res)
+                _fix_smasks_in_resources(pdf, form_res)
+        except Exception:
+            pass
+
+
+def _flatten_smask_image(pdf, img_obj):
+    """
+    Composite an image with its SMask onto a white/cream background,
+    then replace the image data and remove the SMask.
+    """
+    try:
+        w = int(img_obj.get("/Width", 0))
+        h = int(img_obj.get("/Height", 0))
+        if w == 0 or h == 0:
+            return
+
+        # Extract the image
+        pil_img = pikepdf.PdfImage(img_obj).as_pil_image()
+        if pil_img.mode not in ("RGB", "L", "RGBA"):
+            pil_img = pil_img.convert("RGB")
+
+        # Extract the mask
+        smask = img_obj["/SMask"]
+        mask_img = pikepdf.PdfImage(smask).as_pil_image()
+        if mask_img.mode != "L":
+            mask_img = mask_img.convert("L")
+
+        # Composite onto cream/off-white background (matches typical page bg)
+        if pil_img.mode == "RGBA":
+            rgb = pil_img.convert("RGB")
+        else:
+            rgb = pil_img
+        bg = Image.new("RGB", (w, h), (245, 242, 235))  # cream background
+        bg.paste(rgb, mask=mask_img)
+
+        # Encode as JPEG
+        buf = io.BytesIO()
+        bg.save(buf, format="JPEG", quality=90, optimize=True)
+        jpeg_data = buf.getvalue()
+
+        # Replace the image stream
+        img_obj.write(jpeg_data)
+        img_obj[Name("/Filter")] = Name("/DCTDecode")
+        img_obj[Name("/ColorSpace")] = Name("/DeviceRGB")
+        img_obj[Name("/BitsPerComponent")] = 8
+        img_obj[Name("/Width")] = w
+        img_obj[Name("/Height")] = h
+
+        # Remove the SMask
+        del img_obj[Name("/SMask")]
+
+        # Remove DecodeParms if present (leftover from old filter)
+        if "/DecodeParms" in img_obj:
+            del img_obj[Name("/DecodeParms")]
+
+        bg.close()
+        rgb.close()
+        pil_img.close()
+        mask_img.close()
+
+    except Exception as e:
+        log.warning(f"Failed to flatten SMask image: {e}")
+        # If we can't flatten, just remove the SMask as fallback
+        try:
+            del img_obj[Name("/SMask")]
         except Exception:
             pass
 
