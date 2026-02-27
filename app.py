@@ -311,6 +311,70 @@ def ghostscript_rasterize(input_path, output_path, config):
         out_pdf.save(output_path)
         out_pdf.close()
 
+        # Copy hyperlink annotations from original PDF onto rasterized pages
+        try:
+            orig_pdf = Pdf.open(input_path)
+            rast_pdf = Pdf.open(output_path, allow_overwriting_input=True)
+
+            links_copied = 0
+            for i, orig_page in enumerate(orig_pdf.pages):
+                if i >= len(rast_pdf.pages):
+                    break
+
+                annots = orig_page.get("/Annots")
+                if not annots:
+                    continue
+
+                # Get original and rasterized page dimensions for scaling
+                orig_mb = orig_page.MediaBox
+                orig_w = float(orig_mb[2]) - float(orig_mb[0])
+                orig_h = float(orig_mb[3]) - float(orig_mb[1])
+
+                rast_mb = rast_pdf.pages[i].MediaBox
+                rast_w = float(rast_mb[2]) - float(rast_mb[0])
+                rast_h = float(rast_mb[3]) - float(rast_mb[1])
+
+                scale_x = rast_w / orig_w if orig_w > 0 else 1
+                scale_y = rast_h / orig_h if orig_h > 0 else 1
+
+                new_annots = []
+                for annot in annots:
+                    try:
+                        annot_obj = annot if hasattr(annot, 'get') else rast_pdf.make_indirect(annot)
+                        subtype = str(annot_obj.get("/Subtype", ""))
+                        if "/Link" not in subtype:
+                            continue
+
+                        # Copy the annotation into the new PDF
+                        new_annot = rast_pdf.copy_foreign(annot_obj)
+
+                        # Scale the Rect to match rasterized page dimensions
+                        if "/Rect" in new_annot:
+                            rect = new_annot["/Rect"]
+                            new_annot["/Rect"] = pikepdf.Array([
+                                float(rect[0]) * scale_x,
+                                float(rect[1]) * scale_y,
+                                float(rect[2]) * scale_x,
+                                float(rect[3]) * scale_y,
+                            ])
+
+                        new_annots.append(new_annot)
+                        links_copied += 1
+                    except Exception:
+                        continue
+
+                if new_annots:
+                    rast_pdf.pages[i]["/Annots"] = pikepdf.Array(new_annots)
+
+            if links_copied > 0:
+                log.info(f"Preserved {links_copied} hyperlinks from original PDF")
+                rast_pdf.save(output_path)
+
+            rast_pdf.close()
+            orig_pdf.close()
+        except Exception as e:
+            log.warning(f"Link preservation failed (non-fatal): {e}")
+
         # Clean up page PDFs
         for pp in page_pdfs:
             if os.path.exists(pp):
