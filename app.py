@@ -220,22 +220,21 @@ def ghostscript_rasterize(input_path, output_path, config):
             img_stream[Name("/BitsPerComponent")] = 8
             img_stream[Name("/Filter")] = Name("/DCTDecode")
 
-            # Build page — use string keys for Dictionary constructor
-            xobjects = pikepdf.Dictionary()
-            xobjects["/Im0"] = img_stream
-
-            resources = pikepdf.Dictionary()
-            resources["/XObject"] = xobjects
-
-            page_dict = pikepdf.Dictionary()
-            page_dict["/Type"] = Name("/Page")
-            page_dict["/MediaBox"] = pikepdf.Array([0, 0, page_w_pt, page_h_pt])
-            page_dict["/Resources"] = resources
+            # Build page as a proper PDF object
+            page_obj = out_pdf.make_indirect(pikepdf.Dictionary({
+                "/Type": Name("/Page"),
+                "/MediaBox": pikepdf.Array([0, 0, page_w_pt, page_h_pt]),
+                "/Resources": pikepdf.Dictionary({
+                    "/XObject": pikepdf.Dictionary({
+                        "/Im0": img_stream,
+                    }),
+                }),
+            }))
 
             content = f"q {page_w_pt:.4f} 0 0 {page_h_pt:.4f} 0 0 cm /Im0 Do Q"
-            page_dict["/Contents"] = out_pdf.make_stream(content.encode())
+            page_obj["/Contents"] = out_pdf.make_stream(content.encode())
 
-            out_pdf.pages.append(page_dict)
+            out_pdf.pages.append(pikepdf.Page(page_obj))
 
             if page_num % 10 == 0:
                 log.info(f"Processed {page_num}/{num_pages} pages")
@@ -269,35 +268,22 @@ def ghostscript_rasterize(input_path, output_path, config):
 
 def fix_preview_smasks(pdf):
     """
-    Apple Preview has bugs rendering SMask (soft mask) on images with
-    ICCBased colorspaces. Fix by pre-compositing masked images onto
-    a background color (sampled from the page) and removing the SMask.
+    Apple Preview has bugs rendering SMask on images with ICCBased colorspaces.
+    Walk every object in the PDF and flatten any image that has an SMask.
     """
-    for page in pdf.pages:
+    processed = set()
+    for objnum in range(1, len(pdf.objects) + 1):
         try:
-            _fix_smasks_in_resources(pdf, page.get("/Resources", {}))
-        except Exception as e:
-            log.warning(f"SMask fix error on page: {e}")
-
-
-def _fix_smasks_in_resources(pdf, resources):
-    if not hasattr(resources, 'get'):
-        return
-    xobjects = resources.get("/XObject", {})
-    for key in list(xobjects.keys()):
-        try:
-            obj = xobjects[key]
+            obj = pdf.get_object(objnum, 0)
             if not hasattr(obj, 'get'):
                 continue
+            if id(obj) in processed:
+                continue
+            processed.add(id(obj))
 
             subtype = str(obj.get("/Subtype", ""))
-
             if "/Image" in subtype and "/SMask" in obj:
                 _flatten_smask_image(pdf, obj)
-
-            elif "/Form" in subtype:
-                form_res = obj.get("/Resources", {})
-                _fix_smasks_in_resources(pdf, form_res)
         except Exception:
             pass
 
