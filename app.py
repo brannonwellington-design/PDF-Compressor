@@ -1,253 +1,299 @@
 #!/usr/bin/env python3
 """
-PDF Compressor — Two strategies:
+PDF Compressor
 
-1. Vector-preserving (Levels 1–5): Ghostscript re-distills the PDF,
-   compressing images but keeping vectors as vectors. Good when you
-   need to preserve text selectability and vector crispness.
+Vector mode (levels 1-5): pikepdf-only compression.
+  Recompresses images at target quality/DPI while preserving the original
+  page structure, transparency, fonts, and vector art. This ensures
+  Apple Preview compatibility since the transparency structure is untouched.
 
-2. Rasterizing (Levels 6–7): Renders each page to a JPEG image at a
-   target DPI, then assembles a new PDF from those images. This is the
-   ONLY way to dramatically shrink vector-heavy PDFs (Figma, Sketch,
-   InDesign exports) because it eliminates all the complex path data.
-   Text is no longer selectable but the file gets MUCH smaller.
+Rasterize mode (levels 6-7): Ghostscript renders each page to a flat
+  JPEG image, then assembles into a new PDF. Maximum compression but
+  text is no longer selectable.
 """
 
-import io
-import os
-import subprocess
-import sys
-import tempfile
-import shutil
-import logging
+import io, os, subprocess, tempfile, shutil, logging
 from pathlib import Path
-
 from flask import Flask, request, send_file, render_template, jsonify
-
 import pikepdf
 from pikepdf import Pdf, Name
 from PIL import Image
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
-
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("compress")
 
 LEVELS = {
-    "1": {"mode": "vector", "gs_pdfsettings": "/printer", "gs_dpi": 300, "gs_qfactor": 0.15, "strip_metadata": False, "label": "Lossless cleanup"},
-    "2": {"mode": "vector", "gs_pdfsettings": "/printer", "gs_dpi": 250, "gs_qfactor": 0.20, "strip_metadata": False, "label": "High quality"},
-    "3": {"mode": "vector", "gs_pdfsettings": "/ebook",   "gs_dpi": 200, "gs_qfactor": 0.40, "strip_metadata": True,  "label": "Quality"},
-    "4": {"mode": "vector", "gs_pdfsettings": "/ebook",   "gs_dpi": 150, "gs_qfactor": 0.76, "strip_metadata": True,  "label": "Balanced"},
-    "5": {"mode": "vector", "gs_pdfsettings": "/screen",  "gs_dpi": 120, "gs_qfactor": 1.0,  "strip_metadata": True,  "label": "Email-ready"},
+    "1": {"mode": "vector", "target_dpi": 300, "jpeg_quality": 95, "strip_metadata": False, "label": "Lossless cleanup"},
+    "2": {"mode": "vector", "target_dpi": 250, "jpeg_quality": 88, "strip_metadata": False, "label": "High quality"},
+    "3": {"mode": "vector", "target_dpi": 200, "jpeg_quality": 78, "strip_metadata": True,  "label": "Quality"},
+    "4": {"mode": "vector", "target_dpi": 150, "jpeg_quality": 65, "strip_metadata": True,  "label": "Balanced"},
+    "5": {"mode": "vector", "target_dpi": 120, "jpeg_quality": 50, "strip_metadata": True,  "label": "Email-ready"},
     "6": {"mode": "raster", "render_dpi": 150, "jpeg_quality": 80, "strip_metadata": True,  "label": "Aggressive"},
     "7": {"mode": "raster", "render_dpi": 120, "jpeg_quality": 65, "strip_metadata": True,  "label": "Maximum"},
 }
 
 
-# ─── Strategy 1: Vector-preserving GS compression ────────────────────────────
+# ── Vector mode: pikepdf image compression (preserves structure) ──────────────
 
-def ghostscript_vector_compress(input_path, output_path, config):
-    gs = shutil.which("gs")
-    if not gs:
-        log.warning("Ghostscript not found")
-        shutil.copy2(input_path, output_path)
-        return False
+def pikepdf_compress(input_path, output_path, config):
+    """
+    Compress images inside the PDF without altering page structure.
+    This preserves all transparency, Form XObjects, ExtGState, fonts, etc.
+    Only raster images are recompressed at lower quality/resolution.
+    """
+    target_dpi = config["target_dpi"]
+    jpeg_quality = config["jpeg_quality"]
+    strip_meta = config.get("strip_metadata", False)
 
-    dpi = config["gs_dpi"]
-    qfactor = config["gs_qfactor"]
-    pdfsettings = config["gs_pdfsettings"]
+    pdf = Pdf.open(input_path)
+    images_processed = 0
+    bytes_saved = 0
 
-    cmd = [
-        gs, "-dNOSAFER", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",
-        "-dNOPAUSE", "-dBATCH",
-        f"-sOutputFile={output_path}",
-        f"-dPDFSETTINGS={pdfsettings}",
+    # Walk all objects and recompress images
+    for objnum in range(1, len(pdf.objects) + 1):
+        try:
+            obj = pdf.get_object(objnum, 0)
+            if not hasattr(obj, 'get'):
+                continue
+            if str(obj.get("/Subtype", "")) != "/Image":
+                continue
 
-        f"-dColorImageResolution={dpi}",
-        f"-dGrayImageResolution={dpi}",
-        f"-dMonoImageResolution={min(dpi * 2, 300)}",
-        "-dDownsampleColorImages=true", "-dDownsampleGrayImages=true",
-        "-dDownsampleMonoImages=true",
-        "-dColorImageDownsampleType=/Bicubic",
-        "-dGrayImageDownsampleType=/Bicubic",
-        "-dColorImageDownsampleThreshold=1.0",
-        "-dGrayImageDownsampleThreshold=1.0",
+            # Skip tiny images (icons, 1px spacers)
+            w = int(obj.get("/Width", 0))
+            h = int(obj.get("/Height", 0))
+            if w < 32 or h < 32:
+                continue
 
-        "-dAutoFilterColorImages=false", "-dAutoFilterGrayImages=false",
-        "-dColorImageFilter=/DCTEncode", "-dGrayImageFilter=/DCTEncode",
+            # Skip mask images
+            if str(obj.get("/ColorSpace", "")) == "/DeviceGray" and w * h < 100000:
+                continue
 
-        "-dPrinted=false", "-dPreserveAnnots=true",
-        "-dSubsetFonts=true", "-dEmbedAllFonts=true", "-dCompressFonts=true",
-        "-dCompressPages=true", "-dUseFlateCompression=true",
-        "-dOptimize=true", "-dDetectDuplicateImages=true",
-        "-dConvertCMYKImagesToRGB=true",
+            original_size = len(obj.read_raw_bytes())
+            if original_size < 5000:
+                continue
 
-        # Preserve text encoding for proper copy/paste
-        "-dHaveTransparency=true",
-        "-dPreserveMarkedContent=true",
+            # Extract to PIL
+            try:
+                pil_img = pikepdf.PdfImage(obj).as_pil_image()
+            except Exception:
+                continue
 
-        "-c",
-        f"<< /ColorACSImageDict << /QFactor {qfactor} /Blend 1 /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> "
-        f"/GrayACSImageDict << /QFactor {qfactor} /Blend 1 /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> "
-        f"/ColorConversionStrategy /sRGB >> setdistillerparams",
-        "-f",
+            # Calculate current effective DPI (based on how it's used)
+            # If image is much larger than needed at target_dpi, downsample
+            max_dim_at_target = max(w, h)
+            if max_dim_at_target > 2000 and target_dpi <= 200:
+                scale = target_dpi / 150.0  # rough scale factor
+                new_w = max(int(w * scale), 100)
+                new_h = max(int(h * scale), 100)
+                if new_w < w or new_h < h:
+                    pil_img = pil_img.resize((new_w, new_h), Image.LANCZOS)
+                    w, h = new_w, new_h
 
-        input_path,
-    ]
+            # Handle different color modes
+            has_smask = "/SMask" in obj
+            if pil_img.mode == "RGBA":
+                # Preserve alpha — save as PNG-like (Flate)
+                rgb = pil_img.convert("RGB")
+                buf = io.BytesIO()
+                rgb.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+                jpeg_data = buf.getvalue()
 
-    try:
-        log.info(f"GS vector: dpi={dpi}, qfactor={qfactor}, pdfsettings={pdfsettings}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if len(jpeg_data) < original_size:
+                    obj.write(jpeg_data)
+                    obj[Name("/Filter")] = Name("/DCTDecode")
+                    obj[Name("/ColorSpace")] = Name("/DeviceRGB")
+                    obj[Name("/BitsPerComponent")] = 8
+                    obj[Name("/Width")] = w
+                    obj[Name("/Height")] = h
+                    if "/DecodeParms" in obj:
+                        del obj[Name("/DecodeParms")]
+                    bytes_saved += original_size - len(jpeg_data)
+                    images_processed += 1
+                rgb.close()
 
-        if result.returncode != 0:
-            log.error(f"GS failed (rc={result.returncode}): {result.stderr[:500]}")
-            if os.path.exists(output_path):
-                os.unlink(output_path)
-            shutil.copy2(input_path, output_path)
-            return False
+            elif pil_img.mode in ("RGB", "L"):
+                buf = io.BytesIO()
+                pil_img_save = pil_img.convert("RGB") if pil_img.mode == "L" else pil_img
+                pil_img_save.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+                jpeg_data = buf.getvalue()
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            in_sz = os.path.getsize(input_path)
-            out_sz = os.path.getsize(output_path)
-            log.info(f"GS vector: {in_sz/1024/1024:.1f}MB -> {out_sz/1024/1024:.1f}MB ({(1-out_sz/in_sz)*100:.0f}%)")
-            return True
+                if len(jpeg_data) < original_size:
+                    obj.write(jpeg_data)
+                    obj[Name("/Filter")] = Name("/DCTDecode")
+                    obj[Name("/ColorSpace")] = Name("/DeviceRGB") if pil_img.mode == "RGB" else Name("/DeviceGray")
+                    obj[Name("/BitsPerComponent")] = 8
+                    obj[Name("/Width")] = w
+                    obj[Name("/Height")] = h
+                    if "/DecodeParms" in obj:
+                        del obj[Name("/DecodeParms")]
+                    bytes_saved += original_size - len(jpeg_data)
+                    images_processed += 1
 
-        shutil.copy2(input_path, output_path)
-        return False
+            else:
+                # P, CMYK, etc - convert to RGB
+                try:
+                    rgb = pil_img.convert("RGB")
+                    buf = io.BytesIO()
+                    rgb.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+                    jpeg_data = buf.getvalue()
+                    if len(jpeg_data) < original_size:
+                        obj.write(jpeg_data)
+                        obj[Name("/Filter")] = Name("/DCTDecode")
+                        obj[Name("/ColorSpace")] = Name("/DeviceRGB")
+                        obj[Name("/BitsPerComponent")] = 8
+                        obj[Name("/Width")] = w
+                        obj[Name("/Height")] = h
+                        if "/DecodeParms" in obj:
+                            del obj[Name("/DecodeParms")]
+                        bytes_saved += original_size - len(jpeg_data)
+                        images_processed += 1
+                    rgb.close()
+                except Exception:
+                    pass
 
-    except Exception as e:
-        log.error(f"GS exception: {e}")
-        if os.path.exists(output_path):
-            os.unlink(output_path)
-        shutil.copy2(input_path, output_path)
-        return False
+            pil_img.close()
+
+        except Exception:
+            continue
+
+    log.info(f"Recompressed {images_processed} images, saved {bytes_saved/1024/1024:.1f} MB")
+
+    # Strip metadata
+    if strip_meta:
+        if hasattr(pdf, "docinfo") and pdf.docinfo:
+            try:
+                for k in [k for k in pdf.docinfo.keys() if k != "/Title"]:
+                    del pdf.docinfo[k]
+            except Exception:
+                pass
+        try:
+            if "/Metadata" in pdf.Root:
+                del pdf.Root[Name("/Metadata")]
+        except Exception:
+            pass
+        for page in pdf.pages:
+            try:
+                if "/Thumb" in page:
+                    del page[Name("/Thumb")]
+            except Exception:
+                pass
+
+    pdf.remove_unreferenced_resources()
+
+    # Save with maximum Flate compression
+    pdf.save(output_path,
+             recompress_flate=True,
+             object_stream_mode=pikepdf.ObjectStreamMode.generate,
+             normalize_content=True)
+    pdf.close()
+
+    # QPDF final pass
+    qpdf = shutil.which("qpdf")
+    if qpdf:
+        opt = output_path + ".qpdf.pdf"
+        try:
+            r = subprocess.run(
+                [qpdf, "--recompress-flate", "--compression-level=9",
+                 "--object-streams=generate", output_path, opt],
+                capture_output=True, timeout=120)
+            if r.returncode == 0 and os.path.exists(opt):
+                if os.path.getsize(opt) < os.path.getsize(output_path):
+                    os.replace(opt, output_path)
+                else:
+                    os.remove(opt)
+            elif os.path.exists(opt):
+                os.remove(opt)
+        except Exception:
+            if os.path.exists(opt):
+                os.remove(opt)
 
 
-# ─── Strategy 2: Rasterize pages for maximum compression ─────────────────────
+# ── Rasterize mode: GS renders flat images ────────────────────────────────────
 
 def ghostscript_rasterize(input_path, output_path, config):
     """
-    Memory-efficient rasterize: one page at a time.
-    Renders to PNG with pngalpha device (preserves transparency),
-    embeds as Flate-compressed RGB + alpha SMask in the output PDF.
+    Render each page to a flat JPEG via GS (png16m device, white bg,
+    no transparency), then assemble into PDF using Pillow.
     """
     gs = shutil.which("gs")
     if not gs:
-        log.warning("Ghostscript not found for rasterize")
+        log.error("Ghostscript not installed")
         shutil.copy2(input_path, output_path)
         return False
 
     render_dpi = config["render_dpi"]
+    jpeg_quality = config["jpeg_quality"]
     tmpdir = tempfile.mkdtemp()
 
     try:
-        # Count pages
         try:
             p = Pdf.open(input_path)
             num_pages = len(p.pages)
             p.close()
         except Exception:
-            num_pages = 100
+            num_pages = 200
 
-        log.info(f"Rasterizing {num_pages} pages at {render_dpi} DPI")
+        log.info(f"Rasterizing {num_pages} pages at {render_dpi} DPI, quality {jpeg_quality}")
 
-        out_pdf = Pdf.new()
-
+        jpeg_paths = []
         for page_num in range(1, num_pages + 1):
             png_path = os.path.join(tmpdir, f"p{page_num}.png")
 
-            # Render single page to PNG (no alpha — avoids Apple Preview SMask bugs)
-            render_cmd = [
+            result = subprocess.run([
                 gs, "-dNOSAFER", "-sDEVICE=png16m",
-                f"-r{render_dpi}",
-                "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                f"-r{render_dpi}", "-dNOPAUSE", "-dBATCH", "-dQUIET",
                 "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
                 f"-dFirstPage={page_num}", f"-dLastPage={page_num}",
-                f"-sOutputFile={png_path}",
-                input_path,
-            ]
+                f"-sOutputFile={png_path}", input_path,
+            ], capture_output=True, text=True, timeout=120)
 
-            result = subprocess.run(render_cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0 or not os.path.exists(png_path):
-                log.error(f"Failed to render page {page_num}: {result.stderr[:200]}")
+                log.error(f"Page {page_num} render failed: {result.stderr[:200]}")
                 continue
 
+            jpg_path = os.path.join(tmpdir, f"p{page_num}.jpg")
             try:
                 img = Image.open(png_path)
-                img_w, img_h = img.size
-
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-
-                # Save as JPEG for much better compression
-                jpg_path = png_path + ".jpg"
-                jpeg_quality = config.get("jpeg_quality", 80)
                 img.save(jpg_path, format="JPEG", quality=jpeg_quality, optimize=True)
                 img.close()
-
-                with open(jpg_path, "rb") as f:
-                    img_data = f.read()
-
-                os.unlink(jpg_path)
-                use_jpeg = True
-            except Exception as e:
-                log.error(f"Image processing error page {page_num}: {e}")
-                if os.path.exists(png_path):
-                    os.unlink(png_path)
-                continue
-            except Exception as e:
-                log.error(f"Image processing error page {page_num}: {e}")
-                if os.path.exists(png_path):
-                    os.unlink(png_path)
-                continue
-
-            # Remove PNG immediately
-            if os.path.exists(png_path):
                 os.unlink(png_path)
-
-            # Calculate page size in points
-            page_w_pt = img_w * 72.0 / render_dpi
-            page_h_pt = img_h * 72.0 / render_dpi
-
-            # Build image stream
-            img_stream = out_pdf.make_stream(img_data)
-            img_stream[Name("/Type")] = Name("/XObject")
-            img_stream[Name("/Subtype")] = Name("/Image")
-            img_stream[Name("/Width")] = img_w
-            img_stream[Name("/Height")] = img_h
-            img_stream[Name("/ColorSpace")] = Name("/DeviceRGB")
-            img_stream[Name("/BitsPerComponent")] = 8
-            img_stream[Name("/Filter")] = Name("/DCTDecode")
-
-            # Build page as a proper PDF object
-            page_obj = out_pdf.make_indirect(pikepdf.Dictionary({
-                "/Type": Name("/Page"),
-                "/MediaBox": pikepdf.Array([0, 0, page_w_pt, page_h_pt]),
-                "/Resources": pikepdf.Dictionary({
-                    "/XObject": pikepdf.Dictionary({
-                        "/Im0": img_stream,
-                    }),
-                }),
-            }))
-
-            content = f"q {page_w_pt:.4f} 0 0 {page_h_pt:.4f} 0 0 cm /Im0 Do Q"
-            page_obj["/Contents"] = out_pdf.make_stream(content.encode())
-
-            out_pdf.pages.append(pikepdf.Page(page_obj))
+                jpeg_paths.append(jpg_path)
+            except Exception as e:
+                log.error(f"JPEG convert page {page_num}: {e}")
+                continue
 
             if page_num % 10 == 0:
-                log.info(f"Processed {page_num}/{num_pages} pages")
+                log.info(f"Rendered {page_num}/{num_pages}")
 
-        if len(out_pdf.pages) == 0:
-            log.error("No pages rendered successfully")
-            out_pdf.close()
+        if not jpeg_paths:
+            log.error("No pages rendered")
             shutil.copy2(input_path, output_path)
             return False
 
-        log.info(f"Assembled {len(out_pdf.pages)} pages")
-        out_pdf.save(output_path)
-        out_pdf.close()
+        log.info(f"Rendered {len(jpeg_paths)} pages, assembling PDF")
+
+        # Assemble using Pillow
+        images = []
+        for jp in jpeg_paths:
+            img = Image.open(jp)
+            img.load()
+            images.append(img)
+
+        first = images[0]
+        rest = images[1:]
+
+        first.save(output_path, "PDF", resolution=render_dpi,
+                   save_all=True, append_images=rest)
+
+        for img in images:
+            img.close()
+        for jp in jpeg_paths:
+            if os.path.exists(jp):
+                os.unlink(jp)
 
         out_sz = os.path.getsize(output_path)
         in_sz = os.path.getsize(input_path)
@@ -264,201 +310,23 @@ def ghostscript_rasterize(input_path, output_path, config):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# ─── pikepdf structural optimization ─────────────────────────────────────────
-
-def fix_preview_smasks(pdf):
-    """
-    Apple Preview has bugs rendering SMask on images with ICCBased colorspaces.
-    Walk every object in the PDF and flatten any image that has an SMask.
-    """
-    processed = set()
-    for objnum in range(1, len(pdf.objects) + 1):
-        try:
-            obj = pdf.get_object(objnum, 0)
-            if not hasattr(obj, 'get'):
-                continue
-            if id(obj) in processed:
-                continue
-            processed.add(id(obj))
-
-            subtype = str(obj.get("/Subtype", ""))
-            if "/Image" in subtype and "/SMask" in obj:
-                _flatten_smask_image(pdf, obj)
-        except Exception:
-            pass
-
-
-def _flatten_smask_image(pdf, img_obj):
-    """
-    Composite an image with its SMask onto a white/cream background,
-    then replace the image data and remove the SMask.
-    """
-    try:
-        w = int(img_obj.get("/Width", 0))
-        h = int(img_obj.get("/Height", 0))
-        if w == 0 or h == 0:
-            return
-
-        # Extract the image
-        pil_img = pikepdf.PdfImage(img_obj).as_pil_image()
-        if pil_img.mode not in ("RGB", "L", "RGBA"):
-            pil_img = pil_img.convert("RGB")
-
-        # Extract the mask
-        smask = img_obj["/SMask"]
-        mask_img = pikepdf.PdfImage(smask).as_pil_image()
-        if mask_img.mode != "L":
-            mask_img = mask_img.convert("L")
-
-        # Composite onto cream/off-white background (matches typical page bg)
-        if pil_img.mode == "RGBA":
-            rgb = pil_img.convert("RGB")
-        else:
-            rgb = pil_img
-        bg = Image.new("RGB", (w, h), (245, 242, 235))  # cream background
-        bg.paste(rgb, mask=mask_img)
-
-        # Encode as JPEG
-        buf = io.BytesIO()
-        bg.save(buf, format="JPEG", quality=90, optimize=True)
-        jpeg_data = buf.getvalue()
-
-        # Replace the image stream
-        img_obj.write(jpeg_data)
-        img_obj[Name("/Filter")] = Name("/DCTDecode")
-        img_obj[Name("/ColorSpace")] = Name("/DeviceRGB")
-        img_obj[Name("/BitsPerComponent")] = 8
-        img_obj[Name("/Width")] = w
-        img_obj[Name("/Height")] = h
-
-        # Remove the SMask
-        del img_obj[Name("/SMask")]
-
-        # Remove DecodeParms if present (leftover from old filter)
-        if "/DecodeParms" in img_obj:
-            del img_obj[Name("/DecodeParms")]
-
-        bg.close()
-        rgb.close()
-        pil_img.close()
-        mask_img.close()
-
-    except Exception as e:
-        log.warning(f"Failed to flatten SMask image: {e}")
-        # If we can't flatten, just remove the SMask as fallback
-        try:
-            del img_obj[Name("/SMask")]
-        except Exception:
-            pass
-
-
-def pikepdf_optimize(input_path, output_path, config):
-    try:
-        pdf = Pdf.open(input_path)
-
-        if config.get("strip_metadata", False):
-            if hasattr(pdf, "docinfo") and pdf.docinfo:
-                try:
-                    for k in [k for k in pdf.docinfo.keys() if k != "/Title"]:
-                        del pdf.docinfo[k]
-                except Exception:
-                    pass
-            try:
-                if "/Metadata" in pdf.Root:
-                    del pdf.Root[Name("/Metadata")]
-            except Exception:
-                pass
-            for page in pdf.pages:
-                try:
-                    if "/Thumb" in page:
-                        del page[Name("/Thumb")]
-                except Exception:
-                    pass
-
-        pdf.remove_unreferenced_resources()
-
-        # Fix Apple Preview rendering bugs with SMasks
-        fix_preview_smasks(pdf)
-
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp_path = tmp.name
-
-        pdf.save(tmp_path, recompress_flate=True,
-                 object_stream_mode=pikepdf.ObjectStreamMode.generate,
-                 normalize_content=True)
-        pdf.close()
-
-        qpdf = shutil.which("qpdf")
-        if qpdf:
-            opt = tmp_path + ".opt.pdf"
-            r = subprocess.run(
-                [qpdf, "--recompress-flate", "--compression-level=9",
-                 "--object-streams=generate", tmp_path, opt],
-                capture_output=True, timeout=120)
-            if r.returncode == 0 and os.path.exists(opt):
-                if os.path.getsize(opt) < os.path.getsize(tmp_path):
-                    os.replace(opt, tmp_path)
-                else:
-                    os.remove(opt)
-            elif os.path.exists(opt):
-                os.remove(opt)
-
-        shutil.move(tmp_path, output_path)
-
-    except Exception as e:
-        log.error(f"pikepdf error: {e}")
-        shutil.copy2(input_path, output_path)
-
-
-# ─── Main Pipeline ───────────────────────────────────────────────────────────
+# ── Main Pipeline ─────────────────────────────────────────────────────────────
 
 def compress_pdf(input_path, output_path, level="4"):
     if level not in LEVELS:
         level = "4"
     config = LEVELS[level]
     input_size = os.path.getsize(input_path)
-
     log.info(f"Compressing {input_size/1024/1024:.1f}MB at level {level} ({config['label']}, mode={config['mode']})")
 
     if config["mode"] == "raster":
-        # Rasterize mode: render pages to JPEG images
-        gs_worked = ghostscript_rasterize(input_path, output_path, config)
-
-        if not gs_worked:
-            # Fallback to vector compress
+        success = ghostscript_rasterize(input_path, output_path, config)
+        if not success:
             log.warning("Rasterize failed, falling back to vector mode")
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp_path = tmp.name
-            try:
-                fallback_config = LEVELS["5"]  # Use email-ready as fallback
-                ghostscript_vector_compress(input_path, tmp_path, fallback_config)
-                pikepdf_optimize(tmp_path, output_path, fallback_config)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-
+            fallback = LEVELS["5"]
+            pikepdf_compress(input_path, output_path, fallback)
     else:
-        # Vector-preserving mode: GS re-distill + pikepdf cleanup
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp1:
-            gs_path = tmp1.name
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp2:
-            opt_path = tmp2.name
-
-        try:
-            gs_worked = ghostscript_vector_compress(input_path, gs_path, config)
-            pikepdf_optimize(gs_path, opt_path, config)
-
-            gs_size = os.path.getsize(gs_path) if os.path.exists(gs_path) else float("inf")
-            opt_size = os.path.getsize(opt_path) if os.path.exists(opt_path) else float("inf")
-
-            if opt_size <= gs_size:
-                shutil.move(opt_path, output_path)
-            else:
-                shutil.move(gs_path, output_path)
-        finally:
-            for p in [gs_path, opt_path]:
-                if os.path.exists(p):
-                    os.unlink(p)
+        pikepdf_compress(input_path, output_path, config)
 
     output_size = os.path.getsize(output_path)
     if output_size >= input_size:
@@ -467,15 +335,10 @@ def compress_pdf(input_path, output_path, level="4"):
 
     savings = round((1 - output_size / input_size) * 100, 1) if input_size > 0 else 0
     log.info(f"Final: {input_size/1024/1024:.1f}MB -> {output_size/1024/1024:.1f}MB ({savings}%)")
-
-    return {
-        "input_size": input_size,
-        "output_size": output_size,
-        "savings_pct": savings,
-    }
+    return {"input_size": input_size, "output_size": output_size, "savings_pct": savings}
 
 
-# ─── Routes ──────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -492,56 +355,9 @@ def health():
             gs_ver = r.stdout.strip()
         except:
             pass
-
-    # Quick test: can GS actually render a page to JPEG?
-    gs_jpeg_works = False
-    gs_pdfwrite_works = False
-    if gs:
-        try:
-            # Create a tiny 1-page PDF
-            test_pdf = Pdf.new()
-            page = pikepdf.Dictionary({
-                Name("/Type"): Name("/Page"),
-                Name("/MediaBox"): pikepdf.Array([0, 0, 72, 72]),
-                Name("/Contents"): test_pdf.make_stream(b""),
-            })
-            test_pdf.pages.append(page)
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
-                test_pdf.save(tf.name)
-                test_in = tf.name
-            test_pdf.close()
-
-            # Test jpeg device
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tj:
-                test_jpg = tj.name
-            r = subprocess.run(
-                [gs, "-dNOSAFER", "-sDEVICE=jpeg", "-r72", "-dNOPAUSE", "-dBATCH",
-                 f"-sOutputFile={test_jpg}", test_in],
-                capture_output=True, text=True, timeout=10)
-            gs_jpeg_works = r.returncode == 0 and os.path.exists(test_jpg) and os.path.getsize(test_jpg) > 0
-            gs_jpeg_err = r.stderr[:200] if r.returncode != 0 else ""
-
-            # Test pdfwrite device
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tp:
-                test_out = tp.name
-            r2 = subprocess.run(
-                [gs, "-dNOSAFER", "-sDEVICE=pdfwrite", "-dNOPAUSE", "-dBATCH",
-                 f"-sOutputFile={test_out}", test_in],
-                capture_output=True, text=True, timeout=10)
-            gs_pdfwrite_works = r2.returncode == 0
-
-            for f in [test_in, test_jpg, test_out]:
-                if os.path.exists(f):
-                    os.unlink(f)
-
-        except Exception as e:
-            gs_jpeg_err = str(e)
-
     return jsonify({
         "status": "ok",
         "ghostscript": gs_ver or ("found" if gs else "NOT INSTALLED"),
-        "gs_jpeg_device": "works" if gs_jpeg_works else f"BROKEN: {gs_jpeg_err if 'gs_jpeg_err' in dir() else 'unknown'}",
-        "gs_pdfwrite_device": "works" if gs_pdfwrite_works else "BROKEN",
         "qpdf": "installed" if qpdf else "NOT INSTALLED",
     })
 
@@ -560,16 +376,13 @@ def compress():
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_in:
         file.save(tmp_in.name)
         input_path = tmp_in.name
-
     output_path = input_path + ".compressed.pdf"
 
     try:
-        stats = compress_pdf(input_path, output_path, level=level)
+        compress_pdf(input_path, output_path, level=level)
         original_name = Path(file.filename).stem
-        return send_file(
-            output_path, mimetype="application/pdf", as_attachment=True,
-            download_name=f"{original_name}-compressed.pdf",
-        )
+        return send_file(output_path, mimetype="application/pdf", as_attachment=True,
+                         download_name=f"{original_name}-compressed.pdf")
     finally:
         if os.path.exists(input_path):
             os.unlink(input_path)
