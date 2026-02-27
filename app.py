@@ -24,40 +24,104 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB upload limit
 
 # ─── Compression Engine ──────────────────────────────────────────────────────
 
-PRESETS = {
-    "email": {"target_dpi": 120, "jpeg_quality": 72, "strip_metadata": True, "recompress_streams": True},
-    "balanced": {"target_dpi": 150, "jpeg_quality": 82, "strip_metadata": True, "recompress_streams": True},
-    "quality": {"target_dpi": 200, "jpeg_quality": 90, "strip_metadata": False, "recompress_streams": True},
+# Levels 1–7, from gentlest to most aggressive
+LEVELS = {
+    "1": {"target_dpi": 300, "jpeg_quality": 95, "strip_metadata": False, "recompress_streams": True,  "label": "Lossless cleanup"},
+    "2": {"target_dpi": 250, "jpeg_quality": 92, "strip_metadata": False, "recompress_streams": True,  "label": "High quality"},
+    "3": {"target_dpi": 200, "jpeg_quality": 88, "strip_metadata": True,  "recompress_streams": True,  "label": "Quality"},
+    "4": {"target_dpi": 150, "jpeg_quality": 82, "strip_metadata": True,  "recompress_streams": True,  "label": "Balanced"},
+    "5": {"target_dpi": 120, "jpeg_quality": 72, "strip_metadata": True,  "recompress_streams": True,  "label": "Email-ready"},
+    "6": {"target_dpi": 96,  "jpeg_quality": 60, "strip_metadata": True,  "recompress_streams": True,  "label": "Aggressive"},
+    "7": {"target_dpi": 72,  "jpeg_quality": 45, "strip_metadata": True,  "recompress_streams": True,  "label": "Maximum"},
 }
 
 
 def _get_pil_image(image_obj):
+    """Extract a PIL Image from a pikepdf image object, including alpha from SMask."""
     try:
-        return pikepdf.PdfImage(image_obj).as_pil_image()
+        pil = pikepdf.PdfImage(image_obj).as_pil_image()
+
+        # pikepdf strips SMask (alpha) — reconstruct it manually
+        if "/SMask" in image_obj:
+            try:
+                smask = image_obj["/SMask"]
+                alpha_pil = pikepdf.PdfImage(smask).as_pil_image()
+                if alpha_pil.mode != "L":
+                    alpha_pil = alpha_pil.convert("L")
+                # Resize alpha to match if needed
+                if alpha_pil.size != pil.size:
+                    alpha_pil = alpha_pil.resize(pil.size, Image.LANCZOS)
+                # Merge into RGBA
+                if pil.mode != "RGB":
+                    pil = pil.convert("RGB")
+                pil = Image.merge("RGBA", (*pil.split(), alpha_pil))
+            except Exception:
+                pass
+
+        return pil
     except Exception:
         return None
 
 
-def _is_photo_like(pil_image):
-    if pil_image.mode in ("1", "P"):
-        colors = pil_image.convert("RGB").getcolors(maxcolors=256)
-        if colors is not None and len(colors) < 32:
-            return False
-    if pil_image.mode == "RGBA":
-        if pil_image.getchannel("A").getextrema() != (255, 255):
-            return False
-    if pil_image.mode in ("RGB", "RGBA"):
-        try:
-            colors = pil_image.convert("RGB").getcolors(maxcolors=1024)
-            if colors is not None and len(colors) < 64:
-                return False
-        except Exception:
-            pass
+def _has_meaningful_alpha(pil_image):
+    """Check if an RGBA image actually uses its alpha channel (not just fully opaque)."""
+    if pil_image.mode != "RGBA":
+        return False
+    alpha = pil_image.getchannel("A")
+    extrema = alpha.getextrema()
+    # If min alpha is 255, the entire image is fully opaque — alpha is unused
+    if extrema[0] == 255:
+        return False
     return True
 
 
+def _is_photo_like(pil_image):
+    """
+    Determine if image is photo-like (use JPEG) vs diagram/logo (keep lossless).
+    Images with transparency are NEVER treated as photo-like.
+    """
+    # Anything with real transparency must stay lossless to preserve the alpha
+    if _has_meaningful_alpha(pil_image):
+        return False
+
+    # Very low color count = diagram, logo, or flat art
+    if pil_image.mode in ("1", "P", "L"):
+        try:
+            colors = pil_image.convert("RGB").getcolors(maxcolors=256)
+            if colors is not None and len(colors) < 48:
+                return False
+        except Exception:
+            pass
+        return True
+
+    # For RGB/RGBA (with no real alpha), check color complexity
+    try:
+        sample = pil_image.convert("RGB")
+        # Sample a region if image is large to save time
+        if sample.width > 500 or sample.height > 500:
+            sample = sample.resize((min(500, sample.width), min(500, sample.height)), Image.NEAREST)
+        colors = sample.getcolors(maxcolors=2048)
+        if colors is not None and len(colors) < 64:
+            return False
+    except Exception:
+        pass
+
+    return True
+
+
+def _estimate_image_dpi(w_px, h_px, page_w_pt, page_h_pt):
+    """Estimate effective DPI of an image placed on a page."""
+    if page_w_pt <= 0 or page_h_pt <= 0:
+        return 300
+    dpi_x = w_px / (page_w_pt / 72.0)
+    dpi_y = h_px / (page_h_pt / 72.0)
+    return max(dpi_x, dpi_y)
+
+
 def compress_images(pdf, target_dpi, jpeg_quality):
+    """Downsample and recompress images. Preserves transparency."""
     count = 0
+
     for page in pdf.pages:
         resources = page.get("/Resources", {})
         xobjects = resources.get("/XObject", {})
@@ -73,58 +137,123 @@ def compress_images(pdf, target_dpi, jpeg_quality):
                 xobj = obj_ref
                 if not hasattr(xobj, "get") or xobj.get("/Subtype") != Name("/Image"):
                     continue
+
                 w, h = int(xobj.get("/Width", 0)), int(xobj.get("/Height", 0))
-                if w < 32 or h < 32:
+
+                # Skip tiny images (icons, bullets, decorations)
+                if w < 48 or h < 48:
                     continue
 
                 pil = _get_pil_image(xobj)
                 if pil is None:
                     continue
 
-                dpi = max(w / (page_w / 72.0), h / (page_h / 72.0))
-                scale = min(1.0, target_dpi / dpi) if dpi > target_dpi * 1.2 else 1.0
+                # Estimate current DPI and decide on downsampling
+                current_dpi = _estimate_image_dpi(w, h, page_w, page_h)
+                scale = 1.0
+                if current_dpi > target_dpi * 1.15:
+                    scale = target_dpi / current_dpi
+
                 nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
 
-                if scale < 0.95:
+                # Only resize if meaningfully smaller
+                if scale < 0.92:
                     pil = pil.resize((nw, nh), Image.LANCZOS)
 
-                if _is_photo_like(pil):
+                has_alpha = _has_meaningful_alpha(pil)
+                is_photo = _is_photo_like(pil)
+
+                if is_photo and not has_alpha:
+                    # ── JPEG path: photos without transparency ──
                     if pil.mode == "RGBA":
+                        # Flatten onto WHITE (not black)
                         bg = Image.new("RGB", pil.size, (255, 255, 255))
                         bg.paste(pil, mask=pil.split()[3])
                         pil = bg
                     elif pil.mode != "RGB":
                         pil = pil.convert("RGB")
+
                     buf = io.BytesIO()
                     pil.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
-                    new = pdf.make_stream(buf.getvalue())
+                    data = buf.getvalue()
+
+                    # Only replace if JPEG is actually smaller than what was there
+                    new = pdf.make_stream(data)
                     new[Name("/Type")] = Name("/XObject")
                     new[Name("/Subtype")] = Name("/Image")
-                    new[Name("/Width")], new[Name("/Height")] = nw, nh
+                    new[Name("/Width")] = nw
+                    new[Name("/Height")] = nh
                     new[Name("/ColorSpace")] = Name("/DeviceRGB")
                     new[Name("/BitsPerComponent")] = 8
                     new[Name("/Filter")] = Name("/DCTDecode")
                     xobjects[name] = new
+
                 else:
-                    if pil.mode not in ("RGB", "L"):
-                        pil = pil.convert("RGB")
-                    compressed = zlib.compress(pil.tobytes(), 9)
-                    new = pdf.make_stream(compressed)
-                    new[Name("/Type")] = Name("/XObject")
-                    new[Name("/Subtype")] = Name("/Image")
-                    new[Name("/Width")], new[Name("/Height")] = nw, nh
-                    new[Name("/ColorSpace")] = Name("/DeviceGray") if pil.mode == "L" else Name("/DeviceRGB")
-                    new[Name("/BitsPerComponent")] = 8
-                    new[Name("/Filter")] = Name("/FlateDecode")
-                    xobjects[name] = new
+                    # ── Lossless Flate path: diagrams, logos, anything with transparency ──
+                    if has_alpha:
+                        # PRESERVE ALPHA: encode as RGBA with SMask
+                        if pil.mode != "RGBA":
+                            pil = pil.convert("RGBA")
+
+                        # Split into RGB + Alpha
+                        r, g, b, a = pil.split()
+                        rgb = Image.merge("RGB", (r, g, b))
+
+                        # Main image stream (RGB)
+                        rgb_data = zlib.compress(rgb.tobytes(), 9)
+                        new = pdf.make_stream(rgb_data)
+                        new[Name("/Type")] = Name("/XObject")
+                        new[Name("/Subtype")] = Name("/Image")
+                        new[Name("/Width")] = nw
+                        new[Name("/Height")] = nh
+                        new[Name("/ColorSpace")] = Name("/DeviceRGB")
+                        new[Name("/BitsPerComponent")] = 8
+                        new[Name("/Filter")] = Name("/FlateDecode")
+
+                        # Alpha mask stream
+                        alpha_data = zlib.compress(a.tobytes(), 9)
+                        smask = pdf.make_stream(alpha_data)
+                        smask[Name("/Type")] = Name("/XObject")
+                        smask[Name("/Subtype")] = Name("/Image")
+                        smask[Name("/Width")] = nw
+                        smask[Name("/Height")] = nh
+                        smask[Name("/ColorSpace")] = Name("/DeviceGray")
+                        smask[Name("/BitsPerComponent")] = 8
+                        smask[Name("/Filter")] = Name("/FlateDecode")
+
+                        new[Name("/SMask")] = smask
+                        xobjects[name] = new
+
+                    else:
+                        # No transparency — simple Flate
+                        if pil.mode == "RGBA":
+                            # No meaningful alpha, safe to drop
+                            pil = pil.convert("RGB")
+                        elif pil.mode not in ("RGB", "L"):
+                            pil = pil.convert("RGB")
+
+                        raw = zlib.compress(pil.tobytes(), 9)
+                        new = pdf.make_stream(raw)
+                        new[Name("/Type")] = Name("/XObject")
+                        new[Name("/Subtype")] = Name("/Image")
+                        new[Name("/Width")] = nw
+                        new[Name("/Height")] = nh
+                        cs = Name("/DeviceGray") if pil.mode == "L" else Name("/DeviceRGB")
+                        new[Name("/ColorSpace")] = cs
+                        new[Name("/BitsPerComponent")] = 8
+                        new[Name("/Filter")] = Name("/FlateDecode")
+                        xobjects[name] = new
 
                 count += 1
+
             except Exception:
                 continue
+
     return count
 
 
 def strip_metadata(pdf):
+    """Remove non-essential metadata."""
     if hasattr(pdf, "docinfo") and pdf.docinfo:
         try:
             for k in [k for k in pdf.docinfo.keys() if k != "/Title"]:
@@ -144,8 +273,11 @@ def strip_metadata(pdf):
             pass
 
 
-def compress_pdf(input_path, output_path, preset="balanced"):
-    config = PRESETS[preset]
+def compress_pdf(input_path, output_path, level="4"):
+    """Compress a PDF at the given level (1-7). Returns stats dict."""
+    if level not in LEVELS:
+        level = "4"
+    config = LEVELS[level]
     input_size = os.path.getsize(input_path)
 
     pdf = Pdf.open(input_path)
@@ -160,22 +292,31 @@ def compress_pdf(input_path, output_path, preset="balanced"):
         tmp_path = tmp.name
 
     try:
-        pdf.save(tmp_path, recompress_flate=config["recompress_streams"],
-                 object_stream_mode=pikepdf.ObjectStreamMode.generate, normalize_content=True)
+        pdf.save(
+            tmp_path,
+            recompress_flate=config["recompress_streams"],
+            object_stream_mode=pikepdf.ObjectStreamMode.generate,
+            normalize_content=True,
+        )
         pdf.close()
 
+        # QPDF optimization pass
         qpdf = shutil.which("qpdf")
         if qpdf:
             import subprocess
             opt = tmp_path + ".opt.pdf"
-            r = subprocess.run([qpdf, "--recompress-flate", "--compression-level=9",
-                                "--object-streams=generate", tmp_path, opt], capture_output=True)
+            r = subprocess.run(
+                [qpdf, "--recompress-flate", "--compression-level=9",
+                 "--object-streams=generate", tmp_path, opt],
+                capture_output=True,
+            )
             if r.returncode == 0 and os.path.exists(opt) and os.path.getsize(opt) < os.path.getsize(tmp_path):
                 os.replace(opt, tmp_path)
             elif os.path.exists(opt):
                 os.remove(opt)
 
         shutil.move(tmp_path, output_path)
+
     except Exception:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -206,9 +347,9 @@ def compress():
     if not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "File must be a PDF"}), 400
 
-    preset = request.form.get("preset", "balanced")
-    if preset not in PRESETS:
-        preset = "balanced"
+    level = request.form.get("level", "4")
+    if level not in LEVELS:
+        level = "4"
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_in:
         file.save(tmp_in.name)
@@ -217,7 +358,7 @@ def compress():
     output_path = input_path + ".compressed.pdf"
 
     try:
-        stats = compress_pdf(input_path, output_path, preset=preset)
+        stats = compress_pdf(input_path, output_path, level=level)
         original_name = Path(file.filename).stem
         return send_file(
             output_path,
