@@ -61,6 +61,7 @@ def ghostscript_vector_compress(input_path, output_path, config):
     cmd = [
         gs, "-dNOSAFER", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",
         "-dNOPAUSE", "-dBATCH",
+        f"-sOutputFile={output_path}",
         f"-dPDFSETTINGS={pdfsettings}",
 
         f"-dColorImageResolution={dpi}",
@@ -88,7 +89,7 @@ def ghostscript_vector_compress(input_path, output_path, config):
         f"/ColorConversionStrategy /sRGB >> setdistillerparams",
         "-f",
 
-        f"-sOutputFile={output_path}", input_path,
+        input_path,
     ]
 
     try:
@@ -175,10 +176,13 @@ def ghostscript_rasterize(input_path, output_path, config):
             orig_pdf = Pdf.open(input_path)
             orig_page_sizes = []
             for page in orig_pdf.pages:
-                mb = page.get("/MediaBox", [0, 0, 612, 792])
-                w = float(mb[2]) - float(mb[0])
-                h = float(mb[3]) - float(mb[1])
-                orig_page_sizes.append((w, h))
+                try:
+                    mb = page.MediaBox
+                    w = float(mb[2]) - float(mb[0])
+                    h = float(mb[3]) - float(mb[1])
+                    orig_page_sizes.append((w, h))
+                except Exception:
+                    orig_page_sizes.append((612, 792))
             orig_pdf.close()
         except Exception:
             orig_page_sizes = []
@@ -385,9 +389,56 @@ def health():
             gs_ver = r.stdout.strip()
         except:
             pass
+
+    # Quick test: can GS actually render a page to JPEG?
+    gs_jpeg_works = False
+    gs_pdfwrite_works = False
+    if gs:
+        try:
+            # Create a tiny 1-page PDF
+            test_pdf = Pdf.new()
+            page = pikepdf.Dictionary({
+                Name("/Type"): Name("/Page"),
+                Name("/MediaBox"): pikepdf.Array([0, 0, 72, 72]),
+                Name("/Contents"): test_pdf.make_stream(b""),
+            })
+            test_pdf.pages.append(page)
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                test_pdf.save(tf.name)
+                test_in = tf.name
+            test_pdf.close()
+
+            # Test jpeg device
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tj:
+                test_jpg = tj.name
+            r = subprocess.run(
+                [gs, "-dNOSAFER", "-sDEVICE=jpeg", "-r72", "-dNOPAUSE", "-dBATCH",
+                 f"-sOutputFile={test_jpg}", test_in],
+                capture_output=True, text=True, timeout=10)
+            gs_jpeg_works = r.returncode == 0 and os.path.exists(test_jpg) and os.path.getsize(test_jpg) > 0
+            gs_jpeg_err = r.stderr[:200] if r.returncode != 0 else ""
+
+            # Test pdfwrite device
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tp:
+                test_out = tp.name
+            r2 = subprocess.run(
+                [gs, "-dNOSAFER", "-sDEVICE=pdfwrite", "-dNOPAUSE", "-dBATCH",
+                 f"-sOutputFile={test_out}", test_in],
+                capture_output=True, text=True, timeout=10)
+            gs_pdfwrite_works = r2.returncode == 0
+
+            for f in [test_in, test_jpg, test_out]:
+                if os.path.exists(f):
+                    os.unlink(f)
+
+        except Exception as e:
+            gs_jpeg_err = str(e)
+
     return jsonify({
         "status": "ok",
         "ghostscript": gs_ver or ("found" if gs else "NOT INSTALLED"),
+        "gs_jpeg_device": "works" if gs_jpeg_works else f"BROKEN: {gs_jpeg_err if 'gs_jpeg_err' in dir() else 'unknown'}",
+        "gs_pdfwrite_device": "works" if gs_pdfwrite_works else "BROKEN",
         "qpdf": "installed" if qpdf else "NOT INSTALLED",
     })
 
