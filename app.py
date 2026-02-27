@@ -276,24 +276,45 @@ def ghostscript_rasterize(input_path, output_path, config):
 
         log.info(f"Rendered {len(jpeg_paths)} pages, assembling PDF")
 
-        # Assemble using Pillow
-        images = []
+        # Assemble one page at a time to avoid OOM
+        # Convert each JPEG to a single-page PDF, then merge
+        page_pdfs = []
         for jp in jpeg_paths:
-            img = Image.open(jp)
-            img.load()
-            images.append(img)
+            page_pdf_path = jp + ".pdf"
+            try:
+                img = Image.open(jp)
+                img.load()
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(page_pdf_path, "PDF", resolution=render_dpi)
+                img.close()
+                page_pdfs.append(page_pdf_path)
+            except Exception as e:
+                log.error(f"Page PDF creation failed: {e}")
+            os.unlink(jp)
 
-        first = images[0]
-        rest = images[1:]
+        if not page_pdfs:
+            log.error("No page PDFs created")
+            shutil.copy2(input_path, output_path)
+            return False
 
-        first.save(output_path, "PDF", resolution=render_dpi,
-                   save_all=True, append_images=rest)
+        # Merge all single-page PDFs with pikepdf (memory-efficient)
+        out_pdf = Pdf.new()
+        for pp in page_pdfs:
+            try:
+                src = Pdf.open(pp)
+                out_pdf.pages.extend(src.pages)
+                # Don't close src until we save — pikepdf needs it
+            except Exception as e:
+                log.error(f"Merge page failed: {e}")
 
-        for img in images:
-            img.close()
-        for jp in jpeg_paths:
-            if os.path.exists(jp):
-                os.unlink(jp)
+        out_pdf.save(output_path)
+        out_pdf.close()
+
+        # Clean up page PDFs
+        for pp in page_pdfs:
+            if os.path.exists(pp):
+                os.unlink(pp)
 
         out_sz = os.path.getsize(output_path)
         in_sz = os.path.getsize(input_path)
