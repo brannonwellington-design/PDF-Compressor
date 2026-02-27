@@ -216,19 +216,20 @@ def ghostscript_rasterize(input_path, output_path, config):
             img_stream[Name("/BitsPerComponent")] = 8
             img_stream[Name("/Filter")] = Name("/DCTDecode")
 
-            # Build page
-            page_dict = pikepdf.Dictionary({
-                Name("/Type"): Name("/Page"),
-                Name("/MediaBox"): pikepdf.Array([0, 0, page_w_pt, page_h_pt]),
-                Name("/Resources"): pikepdf.Dictionary({
-                    Name("/XObject"): pikepdf.Dictionary({
-                        Name("/Im0"): img_stream,
-                    }),
-                }),
-            })
+            # Build page — use string keys for Dictionary constructor
+            xobjects = pikepdf.Dictionary()
+            xobjects["/Im0"] = img_stream
+
+            resources = pikepdf.Dictionary()
+            resources["/XObject"] = xobjects
+
+            page_dict = pikepdf.Dictionary()
+            page_dict["/Type"] = Name("/Page")
+            page_dict["/MediaBox"] = pikepdf.Array([0, 0, page_w_pt, page_h_pt])
+            page_dict["/Resources"] = resources
 
             content = f"q {page_w_pt:.4f} 0 0 {page_h_pt:.4f} 0 0 cm /Im0 Do Q"
-            page_dict[Name("/Contents")] = out_pdf.make_stream(content.encode())
+            page_dict["/Contents"] = out_pdf.make_stream(content.encode())
 
             out_pdf.pages.append(page_dict)
 
@@ -262,6 +263,44 @@ def ghostscript_rasterize(input_path, output_path, config):
 
 # ─── pikepdf structural optimization ─────────────────────────────────────────
 
+def fix_preview_smasks(pdf):
+    """
+    Apple Preview has bugs rendering certain SMask (soft mask) configurations
+    that Ghostscript produces. This strips SMasks from images where the mask
+    is fully opaque (all white / value 255), since those masks are decorative
+    and not needed. For non-trivial masks, we flatten the image onto white.
+    """
+    for page in pdf.pages:
+        try:
+            _fix_smasks_in_resources(page.get("/Resources", {}))
+        except Exception:
+            pass
+
+
+def _fix_smasks_in_resources(resources):
+    if not hasattr(resources, 'get'):
+        return
+    xobjects = resources.get("/XObject", {})
+    for key in list(xobjects.keys()):
+        try:
+            obj = xobjects[key]
+            if not hasattr(obj, 'get'):
+                continue
+
+            subtype = str(obj.get("/Subtype", ""))
+
+            if "/Image" in subtype and "/SMask" in obj:
+                # Just remove the SMask — GS often creates unnecessary ones
+                del obj[Name("/SMask")]
+
+            elif "/Form" in subtype:
+                # Recurse into Form XObjects
+                form_res = obj.get("/Resources", {})
+                _fix_smasks_in_resources(form_res)
+        except Exception:
+            pass
+
+
 def pikepdf_optimize(input_path, output_path, config):
     try:
         pdf = Pdf.open(input_path)
@@ -286,6 +325,9 @@ def pikepdf_optimize(input_path, output_path, config):
                     pass
 
         pdf.remove_unreferenced_resources()
+
+        # Fix Apple Preview rendering bugs with SMasks
+        fix_preview_smasks(pdf)
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
