@@ -124,9 +124,9 @@ def ghostscript_vector_compress(input_path, output_path, config):
 
 def ghostscript_rasterize(input_path, output_path, config):
     """
-    Two-step rasterize that's memory-efficient:
-    Step 1: GS renders pages to individual JPEGs on disk (no RAM buildup)
-    Step 2: Build PDF one page at a time, never holding more than 1 page in memory
+    Memory-efficient rasterize: one page at a time.
+    Renders to PNG with pngalpha device (preserves transparency),
+    embeds as Flate-compressed RGB + alpha SMask in the output PDF.
     """
     gs = shutil.which("gs")
     if not gs:
@@ -135,84 +135,103 @@ def ghostscript_rasterize(input_path, output_path, config):
         return False
 
     render_dpi = config["render_dpi"]
-    jpeg_quality = config["jpeg_quality"]
     tmpdir = tempfile.mkdtemp()
 
     try:
-        # Step 1: Render directly to JPEG with white background (avoids PNG memory bloat)
-        log.info(f"Rasterizing at {render_dpi} DPI, quality {jpeg_quality}")
-
-        # Use ppmraw device + convert to avoid GS jpeg device transparency issues
-        # Actually, let's use png16m but process one page at a time
-        # First, count pages
-        count_cmd = [gs, "-dNOSAFER", "-dNODISPLAY", "-dQUIET",
-                     "-c", f"({input_path}) (r) file runpdfbegin pdfpagecount = quit"]
+        # Count pages
         try:
-            r = subprocess.run(count_cmd, capture_output=True, text=True, timeout=30)
-            num_pages = int(r.stdout.strip())
+            p = Pdf.open(input_path)
+            num_pages = len(p.pages)
+            p.close()
         except Exception:
-            # Fallback: use pikepdf to count
-            try:
-                p = Pdf.open(input_path)
-                num_pages = len(p.pages)
-                p.close()
-            except Exception:
-                num_pages = 100  # guess
+            num_pages = 100
 
-        log.info(f"PDF has {num_pages} pages")
+        log.info(f"Rasterizing {num_pages} pages at {render_dpi} DPI (preserving transparency)")
 
-        # Step 2: Render each page individually to JPEG and build PDF incrementally
-        from pikepdf import Pdf as PdfWriter
-
-        out_pdf = PdfWriter.new()
+        out_pdf = Pdf.new()
 
         for page_num in range(1, num_pages + 1):
-            jpg_path = os.path.join(tmpdir, f"p{page_num}.jpg")
+            png_path = os.path.join(tmpdir, f"p{page_num}.png")
 
-            # Render single page to JPEG using GS
+            # Render single page to PNG with alpha channel
             render_cmd = [
-                gs, "-dNOSAFER", "-sDEVICE=jpeg",
+                gs, "-dNOSAFER", "-sDEVICE=pngalpha",
                 f"-r{render_dpi}",
-                f"-dJPEGQ={jpeg_quality}",
                 "-dNOPAUSE", "-dBATCH", "-dQUIET",
                 "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
                 f"-dFirstPage={page_num}", f"-dLastPage={page_num}",
-                f"-sOutputFile={jpg_path}",
+                f"-sOutputFile={png_path}",
                 input_path,
             ]
 
             result = subprocess.run(render_cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0 or not os.path.exists(jpg_path):
+            if result.returncode != 0 or not os.path.exists(png_path):
                 log.error(f"Failed to render page {page_num}: {result.stderr[:200]}")
                 continue
 
-            # Check if the JPEG has transparency issues (black bg)
-            # If so, re-render as PNG and convert
             try:
-                img = Image.open(jpg_path)
+                img = Image.open(png_path)
                 img_w, img_h = img.size
+                has_alpha = img.mode == "RGBA"
+
+                import zlib
+
+                if has_alpha:
+                    # Split into RGB + Alpha
+                    r, g, b, a = img.split()
+                    rgb = Image.merge("RGB", (r, g, b))
+
+                    # Compress RGB data
+                    rgb_data = zlib.compress(rgb.tobytes(), 6)
+
+                    # Compress alpha data
+                    alpha_data = zlib.compress(a.tobytes(), 6)
+
+                    rgb.close()
+                else:
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    rgb_data = zlib.compress(img.tobytes(), 6)
+                    alpha_data = None
+
                 img.close()
-            except Exception:
+            except Exception as e:
+                log.error(f"Image processing error page {page_num}: {e}")
+                if os.path.exists(png_path):
+                    os.unlink(png_path)
                 continue
 
-            # Read JPEG bytes
-            with open(jpg_path, "rb") as f:
-                jpeg_data = f.read()
+            # Remove PNG immediately
+            if os.path.exists(png_path):
+                os.unlink(png_path)
 
-            # Calculate page dimensions in points (72 dpi)
+            # Calculate page size in points
             page_w_pt = img_w * 72.0 / render_dpi
             page_h_pt = img_h * 72.0 / render_dpi
 
-            # Create PDF page with this JPEG
-            img_stream = out_pdf.make_stream(jpeg_data)
+            # Build image stream
+            img_stream = out_pdf.make_stream(rgb_data)
             img_stream[Name("/Type")] = Name("/XObject")
             img_stream[Name("/Subtype")] = Name("/Image")
             img_stream[Name("/Width")] = img_w
             img_stream[Name("/Height")] = img_h
             img_stream[Name("/ColorSpace")] = Name("/DeviceRGB")
             img_stream[Name("/BitsPerComponent")] = 8
-            img_stream[Name("/Filter")] = Name("/DCTDecode")
+            img_stream[Name("/Filter")] = Name("/FlateDecode")
 
+            # Add alpha mask if present
+            if alpha_data is not None:
+                smask = out_pdf.make_stream(alpha_data)
+                smask[Name("/Type")] = Name("/XObject")
+                smask[Name("/Subtype")] = Name("/Image")
+                smask[Name("/Width")] = img_w
+                smask[Name("/Height")] = img_h
+                smask[Name("/ColorSpace")] = Name("/DeviceGray")
+                smask[Name("/BitsPerComponent")] = 8
+                smask[Name("/Filter")] = Name("/FlateDecode")
+                img_stream[Name("/SMask")] = smask
+
+            # Build page
             page_dict = pikepdf.Dictionary({
                 Name("/Type"): Name("/Page"),
                 Name("/MediaBox"): pikepdf.Array([0, 0, page_w_pt, page_h_pt]),
@@ -228,18 +247,16 @@ def ghostscript_rasterize(input_path, output_path, config):
 
             out_pdf.pages.append(page_dict)
 
-            # Clean up this page's temp file immediately
-            os.unlink(jpg_path)
-
             if page_num % 10 == 0:
                 log.info(f"Processed {page_num}/{num_pages} pages")
 
         if len(out_pdf.pages) == 0:
-            log.error("No pages were successfully rendered")
+            log.error("No pages rendered successfully")
             out_pdf.close()
             shutil.copy2(input_path, output_path)
             return False
 
+        log.info(f"Assembled {len(out_pdf.pages)} pages")
         out_pdf.save(output_path)
         out_pdf.close()
 
