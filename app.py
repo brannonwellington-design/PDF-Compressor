@@ -124,9 +124,9 @@ def ghostscript_vector_compress(input_path, output_path, config):
 
 def ghostscript_rasterize(input_path, output_path, config):
     """
-    Render each page to a JPEG image at target DPI, then assemble into PDF.
-    This eliminates ALL vector bloat, embedded fonts, Form XObjects, etc.
-    The resulting PDF is just images — much smaller for design-heavy decks.
+    Render each page to a PNG image at target DPI (to preserve transparency
+    and color accuracy), then convert to JPEG and assemble into a PDF.
+    PNG rendering avoids the black-rectangle artifacts from direct JPEG rendering.
     """
     gs = shutil.which("gs")
     if not gs:
@@ -140,14 +140,15 @@ def ghostscript_rasterize(input_path, output_path, config):
     tmpdir = tempfile.mkdtemp()
 
     try:
-        # Step 1: Render all pages to JPEG images
-        log.info(f"Rasterizing at {render_dpi} DPI, JPEG quality {jpeg_quality}")
+        # Step 1: Render all pages to PNG (not JPEG — avoids transparency issues)
+        log.info(f"Rasterizing at {render_dpi} DPI")
         render_cmd = [
-            gs, "-dNOSAFER", "-sDEVICE=jpeg",
+            gs, "-dNOSAFER", "-sDEVICE=png16m",
             f"-r{render_dpi}",
-            f"-dJPEGQ={jpeg_quality}",
             "-dNOPAUSE", "-dBATCH",
-            f"-sOutputFile={tmpdir}/page_%04d.jpg",
+            "-dTextAlphaBits=4",
+            "-dGraphicsAlphaBits=4",
+            f"-sOutputFile={tmpdir}/page_%04d.png",
             input_path,
         ]
 
@@ -158,84 +159,55 @@ def ghostscript_rasterize(input_path, output_path, config):
             return False
 
         # Step 2: Collect rendered pages
-        pages = sorted([
+        page_files = sorted([
             os.path.join(tmpdir, f)
             for f in os.listdir(tmpdir)
-            if f.startswith("page_") and f.endswith(".jpg")
+            if f.startswith("page_") and f.endswith(".png")
         ])
 
-        if not pages:
+        if not page_files:
             log.error("No pages rendered")
             shutil.copy2(input_path, output_path)
             return False
 
-        log.info(f"Rendered {len(pages)} pages")
+        log.info(f"Rendered {len(page_files)} pages as PNG")
 
-        # Step 3: Get original page sizes to maintain aspect ratios
-        try:
-            orig_pdf = Pdf.open(input_path)
-            orig_page_sizes = []
-            for page in orig_pdf.pages:
-                try:
-                    mb = page.MediaBox
-                    w = float(mb[2]) - float(mb[0])
-                    h = float(mb[3]) - float(mb[1])
-                    orig_page_sizes.append((w, h))
-                except Exception:
-                    orig_page_sizes.append((612, 792))
-            orig_pdf.close()
-        except Exception:
-            orig_page_sizes = []
+        # Step 3: Convert PNGs to JPEG-compressed PDF pages using Pillow
+        # Open all pages as PIL images, convert to RGB (flatten any alpha onto white)
+        pil_pages = []
+        for pf in page_files:
+            img = Image.open(pf)
+            if img.mode == "RGBA":
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            pil_pages.append(img)
 
-        # Step 4: Assemble into PDF using pikepdf
-        out_pdf = Pdf.new()
+        if not pil_pages:
+            log.error("No PIL images created")
+            shutil.copy2(input_path, output_path)
+            return False
 
-        for i, page_path in enumerate(pages):
-            img = Image.open(page_path)
-            img_w, img_h = img.size
+        # Step 4: Save as multi-page PDF using Pillow
+        # Pillow handles page sizing and image embedding correctly
+        first_page = pil_pages[0]
+        rest = pil_pages[1:] if len(pil_pages) > 1 else []
 
-            # Use original page dimensions if available, else derive from image
-            if i < len(orig_page_sizes):
-                page_w, page_h = orig_page_sizes[i]
-            else:
-                page_w = img_w * 72.0 / render_dpi
-                page_h = img_h * 72.0 / render_dpi
+        first_page.save(
+            output_path,
+            "PDF",
+            resolution=render_dpi,
+            save_all=True,
+            append_images=rest,
+            quality=jpeg_quality,
+            optimize=True,
+        )
 
-            # Read JPEG data directly (don't re-encode)
-            with open(page_path, "rb") as f:
-                jpeg_data = f.read()
-
-            # Create image XObject
-            img_stream = out_pdf.make_stream(jpeg_data)
-            img_stream[Name("/Type")] = Name("/XObject")
-            img_stream[Name("/Subtype")] = Name("/Image")
-            img_stream[Name("/Width")] = img_w
-            img_stream[Name("/Height")] = img_h
-            img_stream[Name("/ColorSpace")] = Name("/DeviceRGB")
-            img_stream[Name("/BitsPerComponent")] = 8
-            img_stream[Name("/Filter")] = Name("/DCTDecode")
-
-            # Create page with this image scaled to fill
-            page = pikepdf.Dictionary({
-                Name("/Type"): Name("/Page"),
-                Name("/MediaBox"): pikepdf.Array([0, 0, page_w, page_h]),
-                Name("/Resources"): pikepdf.Dictionary({
-                    Name("/XObject"): pikepdf.Dictionary({
-                        Name("/Img"): img_stream,
-                    }),
-                }),
-            })
-
-            # Content stream: draw image to fill page
-            content = f"{page_w} 0 0 {page_h} 0 0 cm /Img Do"
-            page[Name("/Contents")] = out_pdf.make_stream(content.encode())
-
-            out_pdf.pages.append(page)
-
+        # Close all images
+        for img in pil_pages:
             img.close()
-
-        out_pdf.save(output_path, normalize_content=True)
-        out_pdf.close()
 
         out_sz = os.path.getsize(output_path)
         in_sz = os.path.getsize(input_path)
@@ -244,6 +216,8 @@ def ghostscript_rasterize(input_path, output_path, config):
 
     except Exception as e:
         log.error(f"Rasterize error: {e}")
+        import traceback
+        log.error(traceback.format_exc())
         shutil.copy2(input_path, output_path)
         return False
     finally:
