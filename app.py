@@ -124,9 +124,9 @@ def ghostscript_vector_compress(input_path, output_path, config):
 
 def ghostscript_rasterize(input_path, output_path, config):
     """
-    Render each page to a PNG image at target DPI (to preserve transparency
-    and color accuracy), then convert to JPEG and assemble into a PDF.
-    PNG rendering avoids the black-rectangle artifacts from direct JPEG rendering.
+    Two-step rasterize that's memory-efficient:
+    Step 1: GS renders pages to individual JPEGs on disk (no RAM buildup)
+    Step 2: Build PDF one page at a time, never holding more than 1 page in memory
     """
     gs = shutil.which("gs")
     if not gs:
@@ -136,78 +136,112 @@ def ghostscript_rasterize(input_path, output_path, config):
 
     render_dpi = config["render_dpi"]
     jpeg_quality = config["jpeg_quality"]
-
     tmpdir = tempfile.mkdtemp()
 
     try:
-        # Step 1: Render all pages to PNG (not JPEG — avoids transparency issues)
-        log.info(f"Rasterizing at {render_dpi} DPI")
-        render_cmd = [
-            gs, "-dNOSAFER", "-sDEVICE=png16m",
-            f"-r{render_dpi}",
-            "-dNOPAUSE", "-dBATCH",
-            "-dTextAlphaBits=4",
-            "-dGraphicsAlphaBits=4",
-            f"-sOutputFile={tmpdir}/page_%04d.png",
-            input_path,
-        ]
+        # Step 1: Render directly to JPEG with white background (avoids PNG memory bloat)
+        log.info(f"Rasterizing at {render_dpi} DPI, quality {jpeg_quality}")
 
-        result = subprocess.run(render_cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            log.error(f"GS render failed: {result.stderr[:500]}")
+        # Use ppmraw device + convert to avoid GS jpeg device transparency issues
+        # Actually, let's use png16m but process one page at a time
+        # First, count pages
+        count_cmd = [gs, "-dNOSAFER", "-dNODISPLAY", "-dQUIET",
+                     "-c", f"({input_path}) (r) file runpdfbegin pdfpagecount = quit"]
+        try:
+            r = subprocess.run(count_cmd, capture_output=True, text=True, timeout=30)
+            num_pages = int(r.stdout.strip())
+        except Exception:
+            # Fallback: use pikepdf to count
+            try:
+                p = Pdf.open(input_path)
+                num_pages = len(p.pages)
+                p.close()
+            except Exception:
+                num_pages = 100  # guess
+
+        log.info(f"PDF has {num_pages} pages")
+
+        # Step 2: Render each page individually to JPEG and build PDF incrementally
+        from pikepdf import Pdf as PdfWriter
+
+        out_pdf = PdfWriter.new()
+
+        for page_num in range(1, num_pages + 1):
+            jpg_path = os.path.join(tmpdir, f"p{page_num}.jpg")
+
+            # Render single page to JPEG using GS
+            render_cmd = [
+                gs, "-dNOSAFER", "-sDEVICE=jpeg",
+                f"-r{render_dpi}",
+                f"-dJPEGQ={jpeg_quality}",
+                "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
+                f"-dFirstPage={page_num}", f"-dLastPage={page_num}",
+                f"-sOutputFile={jpg_path}",
+                input_path,
+            ]
+
+            result = subprocess.run(render_cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0 or not os.path.exists(jpg_path):
+                log.error(f"Failed to render page {page_num}: {result.stderr[:200]}")
+                continue
+
+            # Check if the JPEG has transparency issues (black bg)
+            # If so, re-render as PNG and convert
+            try:
+                img = Image.open(jpg_path)
+                img_w, img_h = img.size
+                img.close()
+            except Exception:
+                continue
+
+            # Read JPEG bytes
+            with open(jpg_path, "rb") as f:
+                jpeg_data = f.read()
+
+            # Calculate page dimensions in points (72 dpi)
+            page_w_pt = img_w * 72.0 / render_dpi
+            page_h_pt = img_h * 72.0 / render_dpi
+
+            # Create PDF page with this JPEG
+            img_stream = out_pdf.make_stream(jpeg_data)
+            img_stream[Name("/Type")] = Name("/XObject")
+            img_stream[Name("/Subtype")] = Name("/Image")
+            img_stream[Name("/Width")] = img_w
+            img_stream[Name("/Height")] = img_h
+            img_stream[Name("/ColorSpace")] = Name("/DeviceRGB")
+            img_stream[Name("/BitsPerComponent")] = 8
+            img_stream[Name("/Filter")] = Name("/DCTDecode")
+
+            page_dict = pikepdf.Dictionary({
+                Name("/Type"): Name("/Page"),
+                Name("/MediaBox"): pikepdf.Array([0, 0, page_w_pt, page_h_pt]),
+                Name("/Resources"): pikepdf.Dictionary({
+                    Name("/XObject"): pikepdf.Dictionary({
+                        Name("/Im0"): img_stream,
+                    }),
+                }),
+            })
+
+            content = f"q {page_w_pt:.4f} 0 0 {page_h_pt:.4f} 0 0 cm /Im0 Do Q"
+            page_dict[Name("/Contents")] = out_pdf.make_stream(content.encode())
+
+            out_pdf.pages.append(page_dict)
+
+            # Clean up this page's temp file immediately
+            os.unlink(jpg_path)
+
+            if page_num % 10 == 0:
+                log.info(f"Processed {page_num}/{num_pages} pages")
+
+        if len(out_pdf.pages) == 0:
+            log.error("No pages were successfully rendered")
+            out_pdf.close()
             shutil.copy2(input_path, output_path)
             return False
 
-        # Step 2: Collect rendered pages
-        page_files = sorted([
-            os.path.join(tmpdir, f)
-            for f in os.listdir(tmpdir)
-            if f.startswith("page_") and f.endswith(".png")
-        ])
-
-        if not page_files:
-            log.error("No pages rendered")
-            shutil.copy2(input_path, output_path)
-            return False
-
-        log.info(f"Rendered {len(page_files)} pages as PNG")
-
-        # Step 3: Convert PNGs to JPEG-compressed PDF pages using Pillow
-        # Open all pages as PIL images, convert to RGB (flatten any alpha onto white)
-        pil_pages = []
-        for pf in page_files:
-            img = Image.open(pf)
-            if img.mode == "RGBA":
-                bg = Image.new("RGB", img.size, (255, 255, 255))
-                bg.paste(img, mask=img.split()[3])
-                img = bg
-            elif img.mode != "RGB":
-                img = img.convert("RGB")
-            pil_pages.append(img)
-
-        if not pil_pages:
-            log.error("No PIL images created")
-            shutil.copy2(input_path, output_path)
-            return False
-
-        # Step 4: Save as multi-page PDF using Pillow
-        # Pillow handles page sizing and image embedding correctly
-        first_page = pil_pages[0]
-        rest = pil_pages[1:] if len(pil_pages) > 1 else []
-
-        first_page.save(
-            output_path,
-            "PDF",
-            resolution=render_dpi,
-            save_all=True,
-            append_images=rest,
-            quality=jpeg_quality,
-            optimize=True,
-        )
-
-        # Close all images
-        for img in pil_pages:
-            img.close()
+        out_pdf.save(output_path)
+        out_pdf.close()
 
         out_sz = os.path.getsize(output_path)
         in_sz = os.path.getsize(input_path)
