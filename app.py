@@ -146,16 +146,16 @@ def ghostscript_rasterize(input_path, output_path, config):
         except Exception:
             num_pages = 100
 
-        log.info(f"Rasterizing {num_pages} pages at {render_dpi} DPI (preserving transparency)")
+        log.info(f"Rasterizing {num_pages} pages at {render_dpi} DPI")
 
         out_pdf = Pdf.new()
 
         for page_num in range(1, num_pages + 1):
             png_path = os.path.join(tmpdir, f"p{page_num}.png")
 
-            # Render single page to PNG with alpha channel
+            # Render single page to PNG (no alpha — avoids Apple Preview SMask bugs)
             render_cmd = [
-                gs, "-dNOSAFER", "-sDEVICE=pngalpha",
+                gs, "-dNOSAFER", "-sDEVICE=png16m",
                 f"-r{render_dpi}",
                 "-dNOPAUSE", "-dBATCH", "-dQUIET",
                 "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
@@ -172,29 +172,26 @@ def ghostscript_rasterize(input_path, output_path, config):
             try:
                 img = Image.open(png_path)
                 img_w, img_h = img.size
-                has_alpha = img.mode == "RGBA"
 
-                import zlib
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
 
-                if has_alpha:
-                    # Split into RGB + Alpha
-                    r, g, b, a = img.split()
-                    rgb = Image.merge("RGB", (r, g, b))
-
-                    # Compress RGB data
-                    rgb_data = zlib.compress(rgb.tobytes(), 6)
-
-                    # Compress alpha data
-                    alpha_data = zlib.compress(a.tobytes(), 6)
-
-                    rgb.close()
-                else:
-                    if img.mode != "RGB":
-                        img = img.convert("RGB")
-                    rgb_data = zlib.compress(img.tobytes(), 6)
-                    alpha_data = None
-
+                # Save as JPEG for much better compression
+                jpg_path = png_path + ".jpg"
+                jpeg_quality = config.get("jpeg_quality", 80)
+                img.save(jpg_path, format="JPEG", quality=jpeg_quality, optimize=True)
                 img.close()
+
+                with open(jpg_path, "rb") as f:
+                    img_data = f.read()
+
+                os.unlink(jpg_path)
+                use_jpeg = True
+            except Exception as e:
+                log.error(f"Image processing error page {page_num}: {e}")
+                if os.path.exists(png_path):
+                    os.unlink(png_path)
+                continue
             except Exception as e:
                 log.error(f"Image processing error page {page_num}: {e}")
                 if os.path.exists(png_path):
@@ -210,26 +207,14 @@ def ghostscript_rasterize(input_path, output_path, config):
             page_h_pt = img_h * 72.0 / render_dpi
 
             # Build image stream
-            img_stream = out_pdf.make_stream(rgb_data)
+            img_stream = out_pdf.make_stream(img_data)
             img_stream[Name("/Type")] = Name("/XObject")
             img_stream[Name("/Subtype")] = Name("/Image")
             img_stream[Name("/Width")] = img_w
             img_stream[Name("/Height")] = img_h
             img_stream[Name("/ColorSpace")] = Name("/DeviceRGB")
             img_stream[Name("/BitsPerComponent")] = 8
-            img_stream[Name("/Filter")] = Name("/FlateDecode")
-
-            # Add alpha mask if present
-            if alpha_data is not None:
-                smask = out_pdf.make_stream(alpha_data)
-                smask[Name("/Type")] = Name("/XObject")
-                smask[Name("/Subtype")] = Name("/Image")
-                smask[Name("/Width")] = img_w
-                smask[Name("/Height")] = img_h
-                smask[Name("/ColorSpace")] = Name("/DeviceGray")
-                smask[Name("/BitsPerComponent")] = 8
-                smask[Name("/Filter")] = Name("/FlateDecode")
-                img_stream[Name("/SMask")] = smask
+            img_stream[Name("/Filter")] = Name("/DCTDecode")
 
             # Build page
             page_dict = pikepdf.Dictionary({
