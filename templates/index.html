@@ -42,9 +42,8 @@
         .header { text-align: center; margin-bottom: 48px; }
 
         .logo {
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
+            display: flex;
+            justify-content: center;
             margin-bottom: 28px;
         }
 
@@ -118,8 +117,8 @@
 
         /* ── Cards ── */
         .card {
-            background: var(--white); border-radius: 12px;
-            border: 1px solid var(--text-06); padding: 20px 24px; margin-top: 28px;
+            background: transparent; border-radius: 12px;
+            border: none; padding: 20px 0; margin-top: 28px;
         }
 
         .card-title { font-size: 13px; color: var(--text); margin-bottom: 14px; }
@@ -141,8 +140,8 @@
         /* ── File Info ── */
         .file-info {
             display: flex; align-items: center; gap: 14px;
-            padding: 14px 18px; background: var(--white);
-            border-radius: 12px; border: 1px solid var(--text-06);
+            padding: 14px 18px; background: transparent;
+            border-radius: 12px; border: 1px solid var(--text-10);
             margin-bottom: 28px;
         }
 
@@ -223,12 +222,11 @@
 
         .slider-ticks {
             display: flex; justify-content: space-between;
-            padding: 6px 2px 0;
+            padding: 6px 0 0;
         }
 
         .slider-tick {
             font-size: 11px; color: var(--text-40);
-            width: 0; text-align: center;
         }
 
         .slider-tick:first-child { text-align: left; }
@@ -237,9 +235,9 @@
         /* ── Level Description ── */
         .level-desc {
             padding: 16px 20px;
-            background: var(--white);
+            background: transparent;
             border-radius: 12px;
-            border: 1px solid var(--text-06);
+            border: 1px solid var(--text-10);
             margin-bottom: 28px;
             transition: all 0.2s;
         }
@@ -296,20 +294,10 @@
         .progress-label { font-size: 15px; color: var(--text); margin-bottom: 6px; }
         .progress-sub { font-size: 13px; color: var(--text-40); }
 
-        .progress-bar-track {
-            margin-top: 28px; height: 3px;
-            background: var(--text-10); border-radius: 2px; overflow: hidden;
-        }
-
-        .progress-bar-fill {
-            height: 100%; background: var(--brand);
-            border-radius: 2px; transition: width 0.5s ease;
-        }
-
         /* ── Results ── */
         .result-card {
-            background: var(--white); border-radius: 16px;
-            padding: 32px; border: 1px solid var(--text-06);
+            background: transparent; border-radius: 16px;
+            padding: 32px 0; border: none;
         }
 
         .result-layout {
@@ -376,8 +364,16 @@
     <!-- Header -->
     <div class="header">
         <div class="logo">
-            <div class="logo-icon">↘</div>
-            <span class="logo-text">Compress</span>
+            <svg width="105" height="23" viewBox="0 0 105 23" fill="none" xmlns="http://www.w3.org/2000/svg" style="height:16px;width:auto;">
+                <path d="M15.3743 0.408977H8.45517C7.9619 0.408977 7.56238 0.808502 7.56238 1.30177V8.22092C7.56238 8.71419 7.9619 9.11371 8.45517 9.11371H15.3743C15.8676 9.11371 16.2671 8.71419 16.2671 8.22092V1.30177C16.2671 0.808502 15.8676 0.408977 15.3743 0.408977Z" fill="black"/>
+                <path d="M6.71435 9.11354H0.893341C0.383333 9.11354 -0.0284702 9.54096 0.00166153 10.051C0.308559 15.266 3.15769 19.8081 7.3248 22.453C7.75 22.7231 8.31468 22.5847 8.57025 22.1506L11.5232 17.1498C11.7642 16.7413 11.6437 16.2157 11.2486 15.9534C9.23873 14.6221 7.84597 12.4314 7.60268 9.90812C7.55916 9.45503 7.17079 9.11354 6.71547 9.11354H6.71435Z" fill="black"/>
+                <path d="M35.2818 20.7496V0.408936H38.2973V18.1608H48.3076V20.7496H35.2818Z" fill="black"/>
+                <path d="M50.0196 5.81416H52.8929V20.7496H50.0196V5.81416ZM49.9627 3.65207V0.408936H52.9498V3.65207H49.9627Z" fill="black"/>
+                <path d="M54.5939 16.1979H57.4388C57.9224 17.791 58.975 18.7582 61.0517 18.7582C62.7587 18.7582 63.9819 17.9901 63.9819 16.653C63.9819 15.2591 62.5595 14.8892 60.4543 14.3772L59.4017 14.0927C56.9267 13.4953 55.0776 12.3858 55.0776 9.79695C55.0776 7.15124 57.4672 5.41588 60.7957 5.41588C64.0957 5.41588 66.2578 6.8383 66.5992 9.7685H63.8682C63.4414 8.43142 62.4457 7.69176 60.7104 7.69176C58.8897 7.69176 58.0078 8.43142 58.0078 9.54092C58.0078 10.7642 58.8897 11.1056 60.7104 11.6461L62.3035 12.1013C65.2906 12.9547 66.8553 13.8651 66.8553 16.3686C66.8553 19.2419 64.3802 21.091 60.9664 21.091C57.325 21.091 55.1913 19.5264 54.5939 16.1979Z" fill="black"/>
+                <path d="M72.4861 1.77446V5.81416H75.274V8.03314H72.4861V16.9944C72.4861 18.4453 73.1973 18.8436 74.3068 18.8436C74.5059 18.8436 74.8188 18.8151 75.018 18.7867V20.9203C74.5913 21.0057 74.2783 21.0341 73.9085 21.0341C71.2628 21.0341 69.5843 20.1522 69.5843 17.1651V8.03314H67.3369V5.81416H69.5843V1.77446H72.4861Z" fill="black"/>
+                <path d="M90.448 14.0358H78.7556C78.841 16.653 80.6048 18.7298 83.4496 18.7298C85.4979 18.7298 86.4936 17.7625 87.2617 16.4824H90.135C89.31 19.185 86.8919 21.1195 83.3358 21.1195C78.7272 21.1195 75.8539 18.0186 75.8539 13.353C75.8539 8.68746 78.8694 5.38743 83.3358 5.38743C88.2005 5.38743 90.448 9.08574 90.448 13.097V14.0358ZM78.8694 11.7599H87.4609C87.2048 9.37022 85.754 7.72021 83.279 7.72021C80.9177 7.72021 79.1824 9.25643 78.8694 11.7599Z" fill="black"/>
+                <path d="M95.0172 5.81416V7.834C95.7853 6.55382 97.2646 5.38743 99.7681 5.38743C103.21 5.38743 105.003 7.69176 105.003 11.5608V20.7496H102.101V12.6418C102.101 9.68316 101.134 7.834 98.7724 7.834C96.3827 7.834 95.0741 9.7685 95.0741 12.1297V20.7496H92.2008V6.9521C92.2008 6.58227 92.2008 6.18399 92.1723 5.81416H95.0172Z" fill="black"/>
+            </svg>
         </div>
         <h1 class="headline">Make your PDFs email-ready</h1>
         <p class="subline">Smart compression that preserves live text, hyperlinks, and image clarity.</p>
@@ -439,11 +435,6 @@
                 <input type="range" id="level-slider" min="1" max="7" value="4" step="1">
                 <div class="slider-ticks">
                     <span class="slider-tick">Gentle</span>
-                    <span class="slider-tick"></span>
-                    <span class="slider-tick"></span>
-                    <span class="slider-tick"></span>
-                    <span class="slider-tick"></span>
-                    <span class="slider-tick"></span>
                     <span class="slider-tick">Maximum</span>
                 </div>
             </div>
@@ -482,9 +473,6 @@
             </div>
             <div class="progress-label" id="progress-label">Reading PDF structure…</div>
             <div class="progress-sub">This typically takes a few seconds</div>
-            <div class="progress-bar-track">
-                <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
-            </div>
         </div>
     </div>
 
@@ -522,9 +510,8 @@
         <div class="btn-row" id="btn-row-done"></div>
     </div>
 
-    <div class="footer">
-        All processing happens on this server. Your files are deleted immediately after compression.<br>
-        Preserves text, links, bookmarks, and document structure.
+    <div class="footer" style="font-size:10px;">
+        © 2026 Listen Labs
     </div>
 </div>
 
@@ -624,7 +611,6 @@
         const circ = document.getElementById('progress-circle');
         circ.setAttribute('stroke-dashoffset', 364.42 - (pct / 100) * 364.42);
         document.getElementById('progress-pct').textContent = pct + '%';
-        document.getElementById('progress-bar').style.width = pct + '%';
         if (label) document.getElementById('progress-label').textContent = label;
     }
 
