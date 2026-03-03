@@ -370,32 +370,32 @@
         .footer-letters {
             position: relative;
             width: 100%;
-            /* aspect ratio matches full SVG: 549/1840 */
+            /* 549 / 1840 = 29.837% */
             padding-bottom: 29.837%;
         }
 
-        .letter-wrap {
+        .letter-clip {
             position: absolute;
-            top: 0;
-            overflow: hidden;
-            height: 100%;
-        }
-
-        .letter-inner {
+            top: 0; left: 0;
             width: 100%;
             height: 100%;
-            transform: translateY(110%);
+            overflow: hidden;
+        }
+
+        .letter-slide {
+            width: 100%;
+            height: 100%;
+            transform: translateY(100%);
             transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .letter-inner.visible {
+        .letter-slide.visible {
             transform: translateY(0);
         }
 
-        .letter-inner svg {
+        .letter-clip svg {
             position: absolute;
-            top: 0;
-            left: 0;
+            top: 0; left: 0;
             width: 100%;
             height: 100%;
         }
@@ -634,36 +634,12 @@
 
 <div class="footer">
     <div class="footer-letters">
-        <div class="letter-wrap" style="left:0%;width:18.683%">
-            <div class="letter-inner" data-letter="0">
-                <svg viewBox="0 0 343.762 538.602" preserveAspectRatio="none"><path d="M0 538.602V0H79.5815V470.053H343.762V538.602H0Z" fill="black"/></svg>
-            </div>
-        </div>
-        <div class="letter-wrap" style="left:21.056%;width:4.284%">
-            <div class="letter-inner" data-letter="1">
-                <svg viewBox="0 0 78.832 538.602" preserveAspectRatio="none"><path d="M1.502 143.125H77.331V538.602H1.502V143.125ZM0 85.8753V0H78.832V85.8753H0Z" fill="black"/></svg>
-            </div>
-        </div>
-        <div class="letter-wrap" style="left:27.699%;width:17.586%">
-            <div class="letter-inner" data-letter="2">
-                <svg viewBox="0 0 323.588 415.063" preserveAspectRatio="none"><path d="M0 285.498H75.079C87.841 327.682 115.62 353.292 170.426 353.292C215.475 353.292 247.757 332.954 247.757 297.549C247.757 260.639 210.218 250.845 154.66 237.288L126.881 229.754C61.564 213.936 12.765 184.557 12.765 116.007C12.765 45.951 75.828 0 163.67 0C250.76 0 307.82 37.664 316.829 115.253H244.756C233.492 79.849 207.215 60.263 161.419 60.263C113.369 60.263 90.095 79.849 90.095 109.227C90.095 141.619 113.369 150.659 161.419 164.971L203.462 177.024C282.294 199.621 323.588 223.728 323.588 290.018C323.588 366.1 258.268 415.063 168.175 415.063C72.076 415.063 15.765 373.634 0 285.498Z" fill="black"/></svg>
-            </div>
-        </div>
-        <div class="letter-wrap" style="left:45.976%;width:11.384%">
-            <div class="letter-inner" data-letter="3">
-                <svg viewBox="0 0 209.462 509.978" preserveAspectRatio="none"><path d="M135.891 0V106.967H209.462V165.724H135.891V403.01C135.891 441.428 154.662 451.975 183.942 451.975C189.192 451.975 197.452 451.22 202.712 450.468V506.964C191.452 509.226 183.192 509.978 173.432 509.978C103.608 509.978 59.31 486.626 59.31 407.53V165.724H0V106.967H59.31V0H135.891Z" fill="black"/></svg>
-            </div>
-        </div>
-        <div class="letter-wrap" style="left:58.192%;width:20.932%">
-            <div class="letter-inner" data-letter="4">
-                <svg viewBox="0 0 385.15 416.571" preserveAspectRatio="none"><path d="M385.15 229.001H76.581C78.831 298.302 125.381 353.294 200.461 353.294C254.511 353.294 280.791 327.681 301.061 293.785H376.891C355.121 365.348 291.301 416.571 197.451 416.571C75.831 416.571 0 334.462 0 210.921C0 87.382 79.581 0 197.451 0C325.841 0 385.15 97.928 385.15 204.143V229.001ZM79.581 168.738H306.321C299.561 105.461 261.271 61.77 195.951 61.77C133.641 61.77 87.841 102.448 79.581 168.738Z" fill="black"/></svg>
-            </div>
-        </div>
-        <div class="letter-wrap" style="left:81.597%;width:18.403%">
-            <div class="letter-inner" data-letter="5">
-                <svg viewBox="0 0 338.61 406.777" preserveAspectRatio="none"><path d="M75.08 11.3V64.783C95.35 30.885 134.39 0 200.46 0C291.29 0 338.61 61.017 338.61 163.466V406.777H262.02V192.09C262.02 113.747 236.5 64.783 174.18 64.783C111.11 64.783 76.58 116.007 76.58 178.53V406.777H0.75V41.431C0.75 31.639 0.75 21.093 0 11.3H75.08Z" fill="black"/></svg>
-            </div>
-        </div>
+        <div class="letter-clip" data-letter="0"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0 538.602V0H79.5815V470.053H343.762V538.602H0Z" fill="black"/></svg></div></div>
+        <div class="letter-clip" data-letter="1"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M388.941 143.125H464.77V538.602H388.941V143.125ZM387.439 85.8753V0H466.271V85.8753H387.439Z" fill="black"/></svg></div></div>
+        <div class="letter-clip" data-letter="2"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M509.661 418.078H584.74C597.502 460.262 625.281 485.872 680.087 485.872C725.136 485.872 757.418 465.534 757.418 430.129C757.418 393.219 719.879 383.425 664.321 369.868L636.542 362.334C571.225 346.516 522.426 317.137 522.426 248.587C522.426 178.531 585.489 132.58 673.331 132.58C760.421 132.58 817.481 170.244 826.49 247.833H754.417C743.153 212.429 716.876 192.843 671.08 192.843C623.03 192.843 599.756 212.429 599.756 241.807C599.756 274.199 623.03 283.239 671.08 297.551L713.123 309.604C791.955 332.201 833.249 356.308 833.249 422.598C833.249 498.68 767.929 547.643 677.836 547.643C581.737 547.643 525.426 506.214 509.661 418.078Z" fill="black"/></svg></div></div>
+        <div class="letter-clip" data-letter="3"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M981.849 36.1586V143.126H1055.42V201.883H981.849V439.169C981.849 477.587 1000.62 488.134 1029.9 488.134C1035.15 488.134 1043.41 487.379 1048.67 486.627V543.123C1037.41 545.385 1029.15 546.137 1019.39 546.137C949.566 546.137 905.268 522.785 905.268 443.689V201.883H845.958V143.126H905.268V36.1586H981.849Z" fill="black"/></svg></div></div>
+        <div class="letter-clip" data-letter="4"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1455.88 360.826H1147.31C1149.56 430.127 1196.11 485.119 1271.19 485.119C1325.24 485.119 1351.52 459.506 1371.79 425.61H1447.62C1425.85 497.173 1362.03 548.396 1268.18 548.396C1146.56 548.396 1070.73 466.287 1070.73 342.746C1070.73 219.207 1150.31 131.825 1268.18 131.825C1396.57 131.825 1455.88 229.753 1455.88 335.968V360.826ZM1150.31 300.563H1377.05C1370.29 237.286 1332 193.595 1266.68 193.595C1204.37 193.595 1158.57 234.273 1150.31 300.563Z" fill="black"/></svg></div></div>
+        <div class="letter-clip" data-letter="5"><div class="letter-slide"><svg viewBox="0 0 1840 549" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1576.47 143.125V196.608C1596.74 162.71 1635.78 131.825 1701.85 131.825C1792.68 131.825 1840 192.842 1840 295.291V538.602H1763.41V323.915C1763.41 245.572 1737.89 196.608 1675.57 196.608C1612.5 196.608 1577.97 247.832 1577.97 310.355V538.602H1502.14V173.256C1502.14 163.464 1502.14 152.918 1501.39 143.125H1576.47Z" fill="black"/></svg></div></div>
     </div>
 </div>
 <script>
@@ -985,9 +961,10 @@
         });
 
         // Footer letters wipe up sequentially
-        document.querySelectorAll('.letter-inner').forEach(el => {
+        document.querySelectorAll('.letter-clip').forEach(el => {
             const index = parseInt(el.dataset.letter || '0', 10);
-            setTimeout(() => el.classList.add('visible'), 700 + index * 100);
+            const slide = el.querySelector('.letter-slide');
+            setTimeout(() => slide.classList.add('visible'), 700 + index * 100);
         });
     });
 </script>
