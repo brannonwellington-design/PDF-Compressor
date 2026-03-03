@@ -654,16 +654,53 @@ def compress():
     output_path = input_path + ".compressed.pdf"
 
     try:
+        # Analyze original before compression
+        pre_stats = analyze_pdf(input_path)
+
         compress_pdf(input_path, output_path, level=level)
 
         # Analyze compressed output for post-compression stats
         post_stats = analyze_pdf(output_path)
 
+        # Generate diagnostic fingerprint
+        import datetime
+        now = datetime.datetime.utcnow()
+        in_sz = os.path.getsize(input_path) if os.path.exists(input_path) else pre_stats.get("file_size", 0)
+        out_sz = os.path.getsize(output_path)
+        mode = "R" if LEVELS[level]["mode"] == "raster" else "V"
+        transp = "1" if pre_stats.get("has_transparency", False) else "0"
+        smask_count = 0
+        try:
+            pdf_check = Pdf.open(input_path)
+            for objnum in range(1, len(pdf_check.objects) + 1):
+                try:
+                    obj = pdf_check.get_object(objnum, 0)
+                    if hasattr(obj, 'get') and "/SMask" in obj:
+                        smask_count += 1
+                except Exception:
+                    pass
+            pdf_check.close()
+        except Exception:
+            pass
+
+        diag = (
+            f"L{level}{mode}"
+            f"-P{pre_stats.get('pages', 0)}"
+            f"-I{pre_stats.get('images', 0)}"
+            f"-SM{smask_count}"
+            f"-T{transp}"
+            f"-F{pre_stats.get('fonts', 0)}"
+            f"-LK{pre_stats.get('links', 0)}"
+            f"-{in_sz/1024/1024:.1f}to{out_sz/1024/1024:.1f}MB"
+            f"-{now.strftime('%m%d%H%M')}"
+        )
+        log.info(f"Diagnostic: {diag}")
+
         original_name = Path(file.filename).stem
         response = send_file(output_path, mimetype="application/pdf", as_attachment=True,
                          download_name=f"{original_name}-compressed.pdf")
 
-        # Attach stats as response headers
+        # Attach stats and diagnostic as response headers
         response.headers["X-Stats-Pages"] = str(post_stats.get("pages", 0))
         response.headers["X-Stats-Images"] = str(post_stats.get("images", 0))
         response.headers["X-Stats-Vectors"] = str(post_stats.get("vectors", 0))
@@ -672,7 +709,8 @@ def compress():
         response.headers["X-Stats-Links"] = str(post_stats.get("links", 0))
         response.headers["X-Stats-Image-Bytes"] = str(post_stats.get("image_bytes", 0))
         response.headers["X-Stats-Vector-Bytes"] = str(post_stats.get("vector_bytes", 0))
-        response.headers["Access-Control-Expose-Headers"] = "X-Stats-Pages, X-Stats-Images, X-Stats-Vectors, X-Stats-Fonts, X-Stats-Words, X-Stats-Links, X-Stats-Image-Bytes, X-Stats-Vector-Bytes"
+        response.headers["X-Diagnostic"] = diag
+        response.headers["Access-Control-Expose-Headers"] = "X-Stats-Pages, X-Stats-Images, X-Stats-Vectors, X-Stats-Fonts, X-Stats-Words, X-Stats-Links, X-Stats-Image-Bytes, X-Stats-Vector-Bytes, X-Diagnostic"
 
         return response
     finally:

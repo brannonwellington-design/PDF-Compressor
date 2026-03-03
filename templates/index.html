@@ -605,6 +605,9 @@
             <div class="compare-grid" id="compare-grid" style="display:none"></div>
         </div>
         <div class="btn-row" id="btn-row-done"></div>
+        <div id="diag-display" style="display:none; margin-top: 20px; text-align: center;">
+            <span style="font-size: 11px; color: var(--text-20); font-family: monospace; cursor: pointer; user-select: all;" id="diag-code" title="Click to copy diagnostic code"></span>
+        </div>
     </div>
 
 </div>
@@ -617,6 +620,7 @@
     let compressedName = '';
     let preStats = null;
     let postStats = null;
+    let diagCode = '';
 
     const levels = {
         '1': { name: 'Lossless cleanup',  dpi: 300, jpeg: 95, meta: false, raster: false, desc: 'Removes unused objects and recompresses streams. No image quality loss at all. Smallest file size reduction.' },
@@ -833,6 +837,8 @@
                 vector_bytes: parseInt(resp.headers.get('X-Stats-Vector-Bytes') || '0'),
             };
 
+            diagCode = resp.headers.get('X-Diagnostic') || '';
+
             compressedBlob = await resp.blob();
             compressedName = selectedFile.name.replace(/\.pdf$/i, '-compressed.pdf');
 
@@ -880,6 +886,22 @@
         again.onclick = reset;
         row.appendChild(again);
 
+        // Show diagnostic code
+        const diagEl = document.getElementById('diag-display');
+        const diagText = document.getElementById('diag-code');
+        if (diagCode) {
+            diagText.textContent = diagCode;
+            diagEl.style.display = 'block';
+            diagText.onclick = () => {
+                navigator.clipboard.writeText(diagCode).then(() => {
+                    diagText.textContent = 'Copied!';
+                    setTimeout(() => { diagText.textContent = diagCode; }, 1200);
+                });
+            };
+        } else {
+            diagEl.style.display = 'none';
+        }
+
         showSection('done');
     }
 
@@ -893,7 +915,7 @@
 
     function reset() {
         selectedFile = null; compressedBlob = null; compressedName = '';
-        preStats = null; postStats = null;
+        preStats = null; postStats = null; diagCode = '';
         fileInput.value = '';
         slider.value = '4'; updateLevel();
         setProgress(0, 'Reading PDF structure…');
