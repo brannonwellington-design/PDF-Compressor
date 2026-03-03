@@ -51,6 +51,21 @@ def pikepdf_compress(input_path, output_path, config):
     images_processed = 0
     bytes_saved = 0
 
+    # Build a set of all objects that are used as SMasks by other images.
+    # These are alpha mask streams — corrupting them with JPEG breaks transparency.
+    smask_target_objgens = set()
+    for objnum in range(1, len(pdf.objects) + 1):
+        try:
+            obj = pdf.get_object(objnum, 0)
+            if hasattr(obj, 'get') and "/SMask" in obj:
+                smask = obj["/SMask"]
+                if hasattr(smask, 'objgen'):
+                    smask_target_objgens.add(smask.objgen)
+        except Exception:
+            pass
+
+    log.info(f"Found {len(smask_target_objgens)} SMask target objects to protect")
+
     # Walk all objects and recompress images
     for objnum in range(1, len(pdf.objects) + 1):
         try:
@@ -60,18 +75,23 @@ def pikepdf_compress(input_path, output_path, config):
             if str(obj.get("/Subtype", "")) != "/Image":
                 continue
 
+            # Skip if this image IS an SMask used by another image
+            obj_og = obj.objgen if hasattr(obj, 'objgen') else (objnum, 0)
+            if obj_og in smask_target_objgens:
+                continue
+
             # Skip tiny images (icons, 1px spacers)
             w = int(obj.get("/Width", 0))
             h = int(obj.get("/Height", 0))
             if w < 32 or h < 32:
                 continue
 
-            # Skip mask images
-            if str(obj.get("/ColorSpace", "")) == "/DeviceGray" and w * h < 100000:
-                continue
-
             original_size = len(obj.read_raw_bytes())
             if original_size < 5000:
+                continue
+
+            # Skip stencil masks and images that carry their own SMask
+            if obj.get("/ImageMask", False):
                 continue
 
             # Extract to PIL
@@ -410,6 +430,147 @@ def compress_pdf(input_path, output_path, level="4"):
     return {"input_size": input_size, "output_size": output_size, "savings_pct": savings}
 
 
+# ── PDF Analysis ──────────────────────────────────────────────────────────────
+
+def analyze_pdf(filepath):
+    """Extract stats about a PDF: pages, images, vectors, fonts, text, links."""
+    stats = {
+        "pages": 0,
+        "images": 0,
+        "image_bytes": 0,
+        "vectors": 0,
+        "vector_bytes": 0,
+        "fonts": 0,
+        "font_names": [],
+        "words": 0,
+        "links": 0,
+        "has_transparency": False,
+        "file_size": os.path.getsize(filepath),
+    }
+
+    try:
+        pdf = Pdf.open(filepath)
+        stats["pages"] = len(pdf.pages)
+
+        seen_fonts = set()
+        font_objects = set()
+        image_objects = set()
+        form_objects = set()
+
+        # Walk all objects
+        for objnum in range(1, len(pdf.objects) + 1):
+            try:
+                obj = pdf.get_object(objnum, 0)
+                if not hasattr(obj, 'get'):
+                    continue
+
+                subtype = str(obj.get("/Subtype", ""))
+                obj_type = str(obj.get("/Type", ""))
+
+                if "/Image" in subtype and id(obj) not in image_objects:
+                    image_objects.add(id(obj))
+                    stats["images"] += 1
+                    try:
+                        stats["image_bytes"] += len(obj.read_raw_bytes())
+                    except Exception:
+                        pass
+
+                elif "/Form" in subtype and "/Image" not in subtype and id(obj) not in form_objects:
+                    form_objects.add(id(obj))
+                    stats["vectors"] += 1
+                    try:
+                        stats["vector_bytes"] += len(obj.read_raw_bytes())
+                    except Exception:
+                        pass
+
+                elif "/Font" in obj_type or "/Type1" in subtype or "/TrueType" in subtype or "/CIDFontType" in subtype:
+                    if id(obj) not in font_objects:
+                        font_objects.add(id(obj))
+                        stats["fonts"] += 1
+                        try:
+                            name = str(obj.get("/BaseFont", ""))
+                            if name and name != "/" and name not in seen_fonts:
+                                # Clean up font name
+                                clean = name.replace("/", "").split("+")[-1]
+                                if clean:
+                                    seen_fonts.add(clean)
+                        except Exception:
+                            pass
+
+            except Exception:
+                continue
+
+        stats["font_names"] = sorted(list(seen_fonts))[:10]  # Top 10 fonts
+
+        # Count words and links per page
+        for page in pdf.pages:
+            try:
+                # Count links
+                annots = page.get("/Annots")
+                if annots:
+                    for annot in annots:
+                        try:
+                            if hasattr(annot, 'get') and "/Link" in str(annot.get("/Subtype", "")):
+                                stats["links"] += 1
+                        except Exception:
+                            pass
+
+                # Check for transparency
+                ext_gs = page.get("/Resources", {}).get("/ExtGState", {})
+                for key in ext_gs.keys():
+                    try:
+                        gs_dict = ext_gs[key]
+                        if hasattr(gs_dict, 'get') and "/SMask" in gs_dict:
+                            stats["has_transparency"] = True
+                    except Exception:
+                        pass
+
+            except Exception:
+                pass
+
+        # Estimate word count from content streams
+        total_text_bytes = 0
+        for page in pdf.pages:
+            try:
+                contents = page.get("/Contents")
+                if contents:
+                    if hasattr(contents, 'read_bytes'):
+                        data = contents.read_bytes()
+                    else:
+                        data = b""
+                        for s in contents:
+                            try:
+                                data += s.read_bytes()
+                            except Exception:
+                                pass
+
+                    # Count text-showing operators (Tj, TJ, ', ")
+                    text = data.decode("latin-1", errors="ignore")
+                    # Simple heuristic: count parenthesized strings in text ops
+                    in_paren = False
+                    char_count = 0
+                    for ch in text:
+                        if ch == '(':
+                            in_paren = True
+                        elif ch == ')':
+                            in_paren = False
+                        elif in_paren and ch.isalpha():
+                            char_count += 1
+
+                    # Rough: 5 chars per word
+                    total_text_bytes += char_count
+            except Exception:
+                pass
+
+        stats["words"] = max(total_text_bytes // 5, 0)
+
+        pdf.close()
+    except Exception as e:
+        log.error(f"Analysis error: {e}")
+
+    return stats
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -433,6 +594,25 @@ def health():
         "qpdf": "installed" if qpdf else "NOT INSTALLED",
     })
 
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        stats = analyze_pdf(tmp_path)
+        return jsonify(stats)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
 @app.route("/compress", methods=["POST"])
 def compress():
     if "file" not in request.files:
@@ -452,9 +632,26 @@ def compress():
 
     try:
         compress_pdf(input_path, output_path, level=level)
+
+        # Analyze compressed output for post-compression stats
+        post_stats = analyze_pdf(output_path)
+
         original_name = Path(file.filename).stem
-        return send_file(output_path, mimetype="application/pdf", as_attachment=True,
+        response = send_file(output_path, mimetype="application/pdf", as_attachment=True,
                          download_name=f"{original_name}-compressed.pdf")
+
+        # Attach stats as response headers
+        response.headers["X-Stats-Pages"] = str(post_stats.get("pages", 0))
+        response.headers["X-Stats-Images"] = str(post_stats.get("images", 0))
+        response.headers["X-Stats-Vectors"] = str(post_stats.get("vectors", 0))
+        response.headers["X-Stats-Fonts"] = str(post_stats.get("fonts", 0))
+        response.headers["X-Stats-Words"] = str(post_stats.get("words", 0))
+        response.headers["X-Stats-Links"] = str(post_stats.get("links", 0))
+        response.headers["X-Stats-Image-Bytes"] = str(post_stats.get("image_bytes", 0))
+        response.headers["X-Stats-Vector-Bytes"] = str(post_stats.get("vector_bytes", 0))
+        response.headers["Access-Control-Expose-Headers"] = "X-Stats-Pages, X-Stats-Images, X-Stats-Vectors, X-Stats-Fonts, X-Stats-Words, X-Stats-Links, X-Stats-Image-Bytes, X-Stats-Vector-Bytes"
+
+        return response
     finally:
         if os.path.exists(input_path):
             os.unlink(input_path)

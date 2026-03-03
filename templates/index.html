@@ -353,6 +353,70 @@
             font-size: 12px; color: var(--text-40); line-height: 1.7;
         }
 
+        /* ── Stats ── */
+        .stats-grid {
+            display: grid; grid-template-columns: 1fr 1fr 1fr;
+            gap: 0; margin-top: 20px;
+            border: 1px solid var(--text-10); border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .stat-item {
+            padding: 14px 16px; text-align: center;
+            border-right: 1px solid var(--text-06);
+            border-bottom: 1px solid var(--text-06);
+        }
+
+        .stat-item:nth-child(3n) { border-right: none; }
+        .stat-item:nth-last-child(-n+3) { border-bottom: none; }
+
+        .stat-value {
+            font-size: 20px; color: var(--text); letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+
+        .stat-label {
+            font-size: 11px; color: var(--text-40); margin-top: 2px;
+            text-transform: uppercase; letter-spacing: 0.04em;
+        }
+
+        .stats-loading {
+            text-align: center; padding: 20px;
+            font-size: 13px; color: var(--text-40);
+        }
+
+        /* ── Before/After Stats ── */
+        .compare-grid {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 0; margin-top: 20px;
+            border: 1px solid var(--text-10); border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .compare-item {
+            padding: 12px 16px; text-align: center;
+            border-right: 1px solid var(--text-06);
+            border-bottom: 1px solid var(--text-06);
+        }
+
+        .compare-item:nth-child(2n) { border-right: none; }
+        .compare-item:nth-last-child(-n+2) { border-bottom: none; }
+
+        .compare-label {
+            font-size: 11px; color: var(--text-40); margin-bottom: 6px;
+            text-transform: uppercase; letter-spacing: 0.04em;
+        }
+
+        .compare-values { display: flex; align-items: center; justify-content: center; gap: 8px; }
+
+        .compare-before { font-size: 15px; color: var(--text-40); }
+
+        .compare-arrow { font-size: 11px; color: var(--text-20); }
+
+        .compare-after { font-size: 15px; color: var(--text); }
+
+        .compare-after.improved { color: var(--brand); }
+
         @media (max-width: 520px) {
             .headline { font-size: 28px; white-space: normal; }
             .result-layout { gap: 28px; }
@@ -424,6 +488,12 @@
                 <div class="file-size" id="file-size"></div>
             </div>
             <button class="file-remove" onclick="reset()" title="Remove file">×</button>
+        </div>
+
+        <!-- File Analysis -->
+        <div id="file-stats">
+            <div class="stats-loading" id="stats-loading">Analyzing PDF…</div>
+            <div class="stats-grid" id="stats-grid" style="display:none"></div>
         </div>
 
         <!-- Slider -->
@@ -507,6 +577,7 @@
                 <div class="result-badge"><span class="result-badge-check">✓</span> Hyperlinks</div>
                 <div class="result-badge"><span class="result-badge-check">✓</span> Fonts preserved</div>
             </div>
+            <div class="compare-grid" id="compare-grid" style="display:none"></div>
         </div>
         <div class="btn-row" id="btn-row-done"></div>
     </div>
@@ -521,6 +592,8 @@
     let selectedLevel = '4';
     let compressedBlob = null;
     let compressedName = '';
+    let preStats = null;
+    let postStats = null;
 
     const levels = {
         '1': { name: 'Lossless cleanup',  dpi: 300, jpeg: 95, meta: false, raster: false, desc: 'Removes unused objects and recompresses streams. No image quality loss at all. Smallest file size reduction.' },
@@ -539,6 +612,11 @@
         const k = 1024, s = ['B','KB','MB','GB'];
         const i = Math.floor(Math.log(b) / Math.log(k));
         return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + s[i];
+    }
+
+    function formatNum(n) {
+        if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+        return n.toString();
     }
 
     function showSection(name) {
@@ -562,6 +640,57 @@
         setTimeout(() => el.style.display = 'none', 6000);
     }
 
+    // ── Stats Display ──
+
+    function renderPreStats(stats) {
+        const grid = document.getElementById('stats-grid');
+        const items = [
+            { value: stats.pages, label: 'Pages' },
+            { value: formatNum(stats.images), label: 'Images' },
+            { value: formatNum(stats.vectors), label: 'Vectors' },
+            { value: formatNum(stats.words), label: 'Words' },
+            { value: stats.fonts, label: 'Fonts' },
+            { value: stats.links, label: 'Links' },
+        ];
+
+        grid.innerHTML = items.map(i =>
+            `<div class="stat-item"><div class="stat-value">${i.value}</div><div class="stat-label">${i.label}</div></div>`
+        ).join('');
+
+        document.getElementById('stats-loading').style.display = 'none';
+        grid.style.display = 'grid';
+    }
+
+    function renderCompareStats(before, after) {
+        const grid = document.getElementById('compare-grid');
+        const rows = [
+            { label: 'Images', b: before.images, a: after.images },
+            { label: 'Image data', b: formatBytes(before.image_bytes), a: formatBytes(after.image_bytes), raw_b: before.image_bytes, raw_a: after.image_bytes },
+            { label: 'Vectors', b: before.vectors, a: after.vectors },
+            { label: 'Vector data', b: formatBytes(before.vector_bytes), a: formatBytes(after.vector_bytes), raw_b: before.vector_bytes, raw_a: after.vector_bytes },
+            { label: 'Fonts', b: before.fonts, a: after.fonts },
+            { label: 'Links', b: before.links, a: after.links },
+        ];
+
+        grid.innerHTML = rows.map(r => {
+            const bVal = r.raw_b !== undefined ? r.b : formatNum(r.b);
+            const aVal = r.raw_a !== undefined ? r.a : formatNum(r.a);
+            const improved = r.raw_a !== undefined ? r.raw_a < r.raw_b : r.a < r.b;
+            const same = r.raw_a !== undefined ? r.raw_a === r.raw_b : r.a === r.b;
+            const cls = improved ? ' improved' : '';
+            return `<div class="compare-item">
+                <div class="compare-label">${r.label}</div>
+                <div class="compare-values">
+                    <span class="compare-before">${bVal}</span>
+                    <span class="compare-arrow">→</span>
+                    <span class="compare-after${cls}">${aVal}</span>
+                </div>
+            </div>`;
+        }).join('');
+
+        grid.style.display = 'grid';
+    }
+
     // ── Drop Zone ──
 
     const dropzone = document.getElementById('dropzone');
@@ -580,10 +709,30 @@
 
     function handleFile(file) {
         selectedFile = file;
+        preStats = null;
+        postStats = null;
         document.getElementById('file-name').textContent = file.name;
         document.getElementById('file-size').textContent = formatBytes(file.size);
         document.getElementById('error').style.display = 'none';
+
+        // Reset stats display
+        document.getElementById('stats-loading').style.display = 'block';
+        document.getElementById('stats-grid').style.display = 'none';
+
         showSection('configure');
+
+        // Fire off analysis in background
+        const form = new FormData();
+        form.append('file', file);
+        fetch('/analyze', { method: 'POST', body: form })
+            .then(r => r.json())
+            .then(stats => {
+                preStats = stats;
+                renderPreStats(stats);
+            })
+            .catch(() => {
+                document.getElementById('stats-loading').textContent = '';
+            });
     }
 
     // ── Slider ──
@@ -599,7 +748,6 @@
         document.getElementById('set-jpeg').textContent = lv.jpeg + '%';
         document.getElementById('set-meta').textContent = lv.meta ? 'on' : 'off';
 
-        // Show raster warning for levels 6-7
         const rasterBadge = document.getElementById('raster-badge');
         if (rasterBadge) rasterBadge.style.display = lv.raster ? 'block' : 'none';
     }
@@ -618,6 +766,7 @@
     async function startCompress() {
         showSection('compressing');
         compressedBlob = null;
+        postStats = null;
 
         const steps = [
             { label: 'Reading PDF structure…', pct: 8 },
@@ -649,6 +798,18 @@
                 throw new Error(err?.error || 'Compression failed');
             }
 
+            // Read post-compression stats from headers
+            postStats = {
+                pages: parseInt(resp.headers.get('X-Stats-Pages') || '0'),
+                images: parseInt(resp.headers.get('X-Stats-Images') || '0'),
+                vectors: parseInt(resp.headers.get('X-Stats-Vectors') || '0'),
+                fonts: parseInt(resp.headers.get('X-Stats-Fonts') || '0'),
+                words: parseInt(resp.headers.get('X-Stats-Words') || '0'),
+                links: parseInt(resp.headers.get('X-Stats-Links') || '0'),
+                image_bytes: parseInt(resp.headers.get('X-Stats-Image-Bytes') || '0'),
+                vector_bytes: parseInt(resp.headers.get('X-Stats-Vector-Bytes') || '0'),
+            };
+
             compressedBlob = await resp.blob();
             compressedName = selectedFile.name.replace(/\.pdf$/i, '-compressed.pdf');
 
@@ -670,6 +831,13 @@
         document.getElementById('result-pct').textContent = savings + '%';
         document.getElementById('result-original').textContent = formatBytes(originalSize);
         document.getElementById('result-compressed').textContent = formatBytes(compressedSize);
+
+        // Show before/after stats
+        if (preStats && postStats) {
+            renderCompareStats(preStats, postStats);
+        } else {
+            document.getElementById('compare-grid').style.display = 'none';
+        }
 
         const row = document.getElementById('btn-row-done');
         row.innerHTML = '';
@@ -702,10 +870,12 @@
 
     function reset() {
         selectedFile = null; compressedBlob = null; compressedName = '';
+        preStats = null; postStats = null;
         fileInput.value = '';
         slider.value = '4'; updateLevel();
         setProgress(0, 'Reading PDF structure…');
         document.getElementById('error').style.display = 'none';
+        document.getElementById('compare-grid').style.display = 'none';
         showSection('upload');
     }
 </script>
