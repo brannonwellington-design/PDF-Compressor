@@ -486,15 +486,26 @@ def analyze_pdf(filepath):
                         pass
 
                 elif "/Font" in obj_type or "/Type1" in subtype or "/TrueType" in subtype or "/CIDFontType" in subtype:
-                    stats["fonts"] += 1
-                    try:
-                        name = str(obj.get("/BaseFont", ""))
-                        if name and name != "/":
-                            clean = name.replace("/", "").split("+")[-1]
-                            if clean and clean not in seen_fonts:
-                                seen_fonts.add(clean)
-                    except Exception:
-                        pass
+                    font_subtype = str(obj.get("/Subtype", ""))
+                    base = str(obj.get("/BaseFont", ""))
+
+                    if "/Type3" in font_subtype:
+                        # Type3 = vector glyph fonts (Figma, Sketch exports)
+                        # One per page but visually the same font — count as one
+                        if "type3" not in seen_fonts:
+                            seen_fonts.add("type3")
+                    elif base and base != "/":
+                        clean = base.replace("/", "").split("+")[-1]
+                        # Strip weight/style suffixes to get family
+                        for suffix in ["-Regular", "-Bold", "-Italic", "-Light",
+                                       "-Medium", "-Semibold", "-SemiBold",
+                                       "-ExtraBold", "-Black", "-Thin",
+                                       ",Bold", ",Italic", ",BoldItalic"]:
+                            if clean.endswith(suffix):
+                                clean = clean[:-len(suffix)]
+                                break
+                        if clean and clean not in seen_fonts:
+                            seen_fonts.add(clean)
 
             except Exception:
                 continue
@@ -518,7 +529,8 @@ def analyze_pdf(filepath):
                 stats["images"] += 1
                 stats["image_bytes"] += raw_size
 
-        stats["font_names"] = sorted(list(seen_fonts))[:10]
+        stats["font_names"] = sorted([f for f in seen_fonts if f != "type3"])[:10]
+        stats["fonts"] = len(seen_fonts)
 
         # Count links per page
         for page in pdf.pages:
