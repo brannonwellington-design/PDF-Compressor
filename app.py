@@ -93,27 +93,14 @@ def pikepdf_compress(input_path, output_path, config):
 
             # Handle different color modes
             has_smask = "/SMask" in obj
-            if pil_img.mode == "RGBA":
-                # Preserve alpha — save as PNG-like (Flate)
-                rgb = pil_img.convert("RGB")
-                buf = io.BytesIO()
-                rgb.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
-                jpeg_data = buf.getvalue()
+            
+            # Skip images with transparency — JPEG can't hold alpha,
+            # and recompressing would destroy the SMask relationship
+            if has_smask or pil_img.mode == "RGBA":
+                pil_img.close()
+                continue
 
-                if len(jpeg_data) < original_size:
-                    obj.write(jpeg_data)
-                    obj[Name("/Filter")] = Name("/DCTDecode")
-                    obj[Name("/ColorSpace")] = Name("/DeviceRGB")
-                    obj[Name("/BitsPerComponent")] = 8
-                    obj[Name("/Width")] = w
-                    obj[Name("/Height")] = h
-                    if "/DecodeParms" in obj:
-                        del obj[Name("/DecodeParms")]
-                    bytes_saved += original_size - len(jpeg_data)
-                    images_processed += 1
-                rgb.close()
-
-            elif pil_img.mode in ("RGB", "L"):
+            if pil_img.mode in ("RGB", "L"):
                 buf = io.BytesIO()
                 pil_img_save = pil_img.convert("RGB") if pil_img.mode == "L" else pil_img
                 pil_img_save.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
