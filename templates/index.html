@@ -365,25 +365,39 @@
         .footer {
             margin-top: 56px;
             padding: 0 24px 24px;
-            overflow: hidden;
         }
 
-        .footer svg {
+        .footer-letters {
+            position: relative;
             width: 100%;
-            height: auto;
-            display: block;
+            /* aspect ratio matches full SVG: 549/1840 */
+            padding-bottom: 29.837%;
         }
 
-        .letter {
-            opacity: 0;
-            transform: translate(0, 200);
-            transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
-                        transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+        .letter-wrap {
+            position: absolute;
+            top: 0;
+            overflow: hidden;
+            height: 100%;
         }
 
-        .letter.visible {
-            opacity: 1;
-            transform: translate(0, 0);
+        .letter-inner {
+            width: 100%;
+            height: 100%;
+            transform: translateY(110%);
+            transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .letter-inner.visible {
+            transform: translateY(0);
+        }
+
+        .letter-inner svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
         }
 
         /* ── Stats ── */
@@ -618,7 +632,40 @@
 
 </div>
 
-<div class="footer" id="footer-svg"></div>
+<div class="footer">
+    <div class="footer-letters">
+        <div class="letter-wrap" style="left:0%;width:18.683%">
+            <div class="letter-inner" data-letter="0">
+                <svg viewBox="0 0 343.762 538.602" preserveAspectRatio="none"><path d="M0 538.602V0H79.5815V470.053H343.762V538.602H0Z" fill="black"/></svg>
+            </div>
+        </div>
+        <div class="letter-wrap" style="left:21.056%;width:4.284%">
+            <div class="letter-inner" data-letter="1">
+                <svg viewBox="0 0 78.832 538.602" preserveAspectRatio="none"><path d="M1.502 143.125H77.331V538.602H1.502V143.125ZM0 85.8753V0H78.832V85.8753H0Z" fill="black"/></svg>
+            </div>
+        </div>
+        <div class="letter-wrap" style="left:27.699%;width:17.586%">
+            <div class="letter-inner" data-letter="2">
+                <svg viewBox="0 0 323.588 415.063" preserveAspectRatio="none"><path d="M0 285.498H75.079C87.841 327.682 115.62 353.292 170.426 353.292C215.475 353.292 247.757 332.954 247.757 297.549C247.757 260.639 210.218 250.845 154.66 237.288L126.881 229.754C61.564 213.936 12.765 184.557 12.765 116.007C12.765 45.951 75.828 0 163.67 0C250.76 0 307.82 37.664 316.829 115.253H244.756C233.492 79.849 207.215 60.263 161.419 60.263C113.369 60.263 90.095 79.849 90.095 109.227C90.095 141.619 113.369 150.659 161.419 164.971L203.462 177.024C282.294 199.621 323.588 223.728 323.588 290.018C323.588 366.1 258.268 415.063 168.175 415.063C72.076 415.063 15.765 373.634 0 285.498Z" fill="black"/></svg>
+            </div>
+        </div>
+        <div class="letter-wrap" style="left:45.976%;width:11.384%">
+            <div class="letter-inner" data-letter="3">
+                <svg viewBox="0 0 209.462 509.978" preserveAspectRatio="none"><path d="M135.891 0V106.967H209.462V165.724H135.891V403.01C135.891 441.428 154.662 451.975 183.942 451.975C189.192 451.975 197.452 451.22 202.712 450.468V506.964C191.452 509.226 183.192 509.978 173.432 509.978C103.608 509.978 59.31 486.626 59.31 407.53V165.724H0V106.967H59.31V0H135.891Z" fill="black"/></svg>
+            </div>
+        </div>
+        <div class="letter-wrap" style="left:58.192%;width:20.932%">
+            <div class="letter-inner" data-letter="4">
+                <svg viewBox="0 0 385.15 416.571" preserveAspectRatio="none"><path d="M385.15 229.001H76.581C78.831 298.302 125.381 353.294 200.461 353.294C254.511 353.294 280.791 327.681 301.061 293.785H376.891C355.121 365.348 291.301 416.571 197.451 416.571C75.831 416.571 0 334.462 0 210.921C0 87.382 79.581 0 197.451 0C325.841 0 385.15 97.928 385.15 204.143V229.001ZM79.581 168.738H306.321C299.561 105.461 261.271 61.77 195.951 61.77C133.641 61.77 87.841 102.448 79.581 168.738Z" fill="black"/></svg>
+            </div>
+        </div>
+        <div class="letter-wrap" style="left:81.597%;width:18.403%">
+            <div class="letter-inner" data-letter="5">
+                <svg viewBox="0 0 338.61 406.777" preserveAspectRatio="none"><path d="M75.08 11.3V64.783C95.35 30.885 134.39 0 200.46 0C291.29 0 338.61 61.017 338.61 163.466V406.777H262.02V192.09C262.02 113.747 236.5 64.783 174.18 64.783C111.11 64.783 76.58 116.007 76.58 178.53V406.777H0.75V41.431C0.75 31.639 0.75 21.093 0 11.3H75.08Z" fill="black"/></svg>
+            </div>
+        </div>
+    </div>
+</div>
 <script>
     let selectedFile = null;
     let selectedLevel = '4';
@@ -937,23 +984,11 @@
             setTimeout(() => el.classList.add('visible'), delay);
         });
 
-        // Load footer SVG and animate letters sequentially
-        fetch('/static/listen-footer.svg')
-            .then(r => r.text())
-            .then(svg => {
-                const container = document.getElementById('footer-svg');
-                container.innerHTML = svg;
-                const svgEl = container.querySelector('svg');
-                if (svgEl) {
-                    svgEl.style.width = '100%';
-                    svgEl.style.height = 'auto';
-                    svgEl.style.display = 'block';
-                }
-                container.querySelectorAll('.letter').forEach(el => {
-                    const index = parseInt(el.dataset.letter || '0', 10);
-                    setTimeout(() => el.classList.add('visible'), 700 + index * 100);
-                });
-            });
+        // Footer letters wipe up sequentially
+        document.querySelectorAll('.letter-inner').forEach(el => {
+            const index = parseInt(el.dataset.letter || '0', 10);
+            setTimeout(() => el.classList.add('visible'), 700 + index * 100);
+        });
     });
 </script>
 
