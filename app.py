@@ -452,31 +452,33 @@ def analyze_pdf(filepath):
         pdf = Pdf.open(filepath)
         stats["pages"] = len(pdf.pages)
 
+        seen = set()
         seen_fonts = set()
-        font_objects = set()
-        image_objects = set()
-        form_objects = set()
+        all_images = {}  # objgen -> (obj, raw_size)
 
-        # Walk all objects
+        # First pass: collect all objects
         for objnum in range(1, len(pdf.objects) + 1):
             try:
                 obj = pdf.get_object(objnum, 0)
                 if not hasattr(obj, 'get'):
                     continue
 
+                og = obj.objgen if hasattr(obj, 'objgen') else (objnum, 0)
+                if og in seen:
+                    continue
+                seen.add(og)
+
                 subtype = str(obj.get("/Subtype", ""))
                 obj_type = str(obj.get("/Type", ""))
 
-                if "/Image" in subtype and id(obj) not in image_objects:
-                    image_objects.add(id(obj))
-                    stats["images"] += 1
+                if "/Image" in subtype:
                     try:
-                        stats["image_bytes"] += len(obj.read_raw_bytes())
+                        raw = len(obj.read_raw_bytes())
                     except Exception:
-                        pass
+                        raw = 0
+                    all_images[og] = raw
 
-                elif "/Form" in subtype and "/Image" not in subtype and id(obj) not in form_objects:
-                    form_objects.add(id(obj))
+                elif "/Form" in subtype:
                     stats["vectors"] += 1
                     try:
                         stats["vector_bytes"] += len(obj.read_raw_bytes())
@@ -484,28 +486,43 @@ def analyze_pdf(filepath):
                         pass
 
                 elif "/Font" in obj_type or "/Type1" in subtype or "/TrueType" in subtype or "/CIDFontType" in subtype:
-                    if id(obj) not in font_objects:
-                        font_objects.add(id(obj))
-                        stats["fonts"] += 1
-                        try:
-                            name = str(obj.get("/BaseFont", ""))
-                            if name and name != "/" and name not in seen_fonts:
-                                # Clean up font name
-                                clean = name.replace("/", "").split("+")[-1]
-                                if clean:
-                                    seen_fonts.add(clean)
-                        except Exception:
-                            pass
+                    stats["fonts"] += 1
+                    try:
+                        name = str(obj.get("/BaseFont", ""))
+                        if name and name != "/":
+                            clean = name.replace("/", "").split("+")[-1]
+                            if clean and clean not in seen_fonts:
+                                seen_fonts.add(clean)
+                    except Exception:
+                        pass
 
             except Exception:
                 continue
 
-        stats["font_names"] = sorted(list(seen_fonts))[:10]  # Top 10 fonts
+        # Second pass: find SMask targets so we can exclude alpha masks from image count
+        smask_objgens = set()
+        for objnum in range(1, len(pdf.objects) + 1):
+            try:
+                obj = pdf.get_object(objnum, 0)
+                if hasattr(obj, 'get') and "/SMask" in obj:
+                    smask = obj["/SMask"]
+                    if hasattr(smask, 'objgen'):
+                        smask_objgens.add(smask.objgen)
+                        stats["has_transparency"] = True
+            except Exception:
+                pass
 
-        # Count words and links per page
+        # Count visible images (exclude alpha masks)
+        for og, raw_size in all_images.items():
+            if og not in smask_objgens:
+                stats["images"] += 1
+                stats["image_bytes"] += raw_size
+
+        stats["font_names"] = sorted(list(seen_fonts))[:10]
+
+        # Count links per page
         for page in pdf.pages:
             try:
-                # Count links
                 annots = page.get("/Annots")
                 if annots:
                     for annot in annots:
@@ -515,21 +532,21 @@ def analyze_pdf(filepath):
                         except Exception:
                             pass
 
-                # Check for transparency
-                ext_gs = page.get("/Resources", {}).get("/ExtGState", {})
-                for key in ext_gs.keys():
-                    try:
-                        gs_dict = ext_gs[key]
-                        if hasattr(gs_dict, 'get') and "/SMask" in gs_dict:
-                            stats["has_transparency"] = True
-                    except Exception:
-                        pass
-
+                # Check for transparency via ExtGState
+                if not stats["has_transparency"]:
+                    ext_gs = page.get("/Resources", {}).get("/ExtGState", {})
+                    for key in ext_gs.keys():
+                        try:
+                            gs_dict = ext_gs[key]
+                            if hasattr(gs_dict, 'get') and "/SMask" in gs_dict:
+                                stats["has_transparency"] = True
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
         # Estimate word count from content streams
-        total_text_bytes = 0
+        total_chars = 0
         for page in pdf.pages:
             try:
                 contents = page.get("/Contents")
@@ -544,25 +561,19 @@ def analyze_pdf(filepath):
                             except Exception:
                                 pass
 
-                    # Count text-showing operators (Tj, TJ, ', ")
                     text = data.decode("latin-1", errors="ignore")
-                    # Simple heuristic: count parenthesized strings in text ops
                     in_paren = False
-                    char_count = 0
                     for ch in text:
                         if ch == '(':
                             in_paren = True
                         elif ch == ')':
                             in_paren = False
                         elif in_paren and ch.isalpha():
-                            char_count += 1
-
-                    # Rough: 5 chars per word
-                    total_text_bytes += char_count
+                            total_chars += 1
             except Exception:
                 pass
 
-        stats["words"] = max(total_text_bytes // 5, 0)
+        stats["words"] = max(total_chars // 5, 0)
 
         pdf.close()
     except Exception as e:
